@@ -17,7 +17,7 @@ logging.basicConfig(
     format='%(levelname)s: %(message)s'
 )
 
-from capybara_fetcher.orchestrator import (
+from old.capybara_fetcher.orchestrator import (
     CacheBuildConfig,
     TickerProcessingError,
     build_failure_meta,
@@ -25,8 +25,8 @@ from capybara_fetcher.orchestrator import (
     INDUSTRY_BENCHMARK_069500,
     INDUSTRY_BENCHMARK_UNIVERSE,
 )
-from capybara_fetcher.io_utils import write_json
-from capybara_fetcher.providers import PykrxProvider, KoreaInvestmentProvider, FdrProvider, CompositeProvider
+from old.capybara_fetcher.io_utils import write_json
+from old.capybara_fetcher.providers import PykrxProvider, KoreaInvestmentProvider, FdrProvider, CompositeProvider
 
 def main():
     parser = argparse.ArgumentParser(description="Generate Korea Universe Feature Cache (fail-fast)")

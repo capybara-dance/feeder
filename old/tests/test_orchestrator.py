@@ -1,8 +1,8 @@
 import pandas as pd
 import pytest
 
-from capybara_fetcher.orchestrator import CacheBuildConfig, run_cache_build
-from capybara_fetcher.provider import DataProvider
+from old.capybara_fetcher.orchestrator import CacheBuildConfig, run_cache_build
+from old.capybara_fetcher.provider import DataProvider
 
 
 class FakeProvider(DataProvider):

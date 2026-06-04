@@ -1,7 +1,7 @@
 import pytest
 import pandas as pd
 
-from capybara_fetcher.standardize import standardize_ohlcv
+from old.capybara_fetcher.standardize import standardize_ohlcv
 
 
 def test_standardize_pykrx_like_frame():

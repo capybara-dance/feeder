@@ -1,6 +1,6 @@
 import pandas as pd
 
-from capybara_fetcher.indicators import compute_features, MA_WINDOWS, MRS_WINDOWS
+from old.capybara_fetcher.indicators import compute_features, MA_WINDOWS, MRS_WINDOWS
 
 
 def test_compute_features_adds_columns_and_new_high_flag():

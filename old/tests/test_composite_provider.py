@@ -2,7 +2,7 @@
 Tests for CompositeProvider.
 """
 import pytest
-from capybara_fetcher.providers import CompositeProvider
+from old.capybara_fetcher.providers import CompositeProvider
 
 
 def test_composite_provider_name():

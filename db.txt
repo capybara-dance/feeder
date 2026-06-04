@@ -1,0 +1,91 @@
+-- 테이블 및 제약 조건 삭제 스크립트 (초기화용 필요시 사용)
+-- DROP TABLE ETF_COMPONENT CASCADE CONSTRAINTS;
+-- DROP TABLE STOCK_DIVIDEND CASCADE CONSTRAINTS;
+-- DROP TABLE DAILY_PRICE CASCADE CONSTRAINTS;
+-- DROP TABLE STOCK_MASTER CASCADE CONSTRAINTS;
+-- DROP TABLE STOCK_INDUSTRY CASCADE CONSTRAINTS;
+
+-- 1. STOCK_INDUSTRY (업종 마스터)
+CREATE TABLE STOCK_INDUSTRY (
+    INDUSTRY_CODE   VARCHAR2(10) NOT NULL,   
+        LARGE_CLASS     VARCHAR2(50) NOT NULL,   
+            MEDIUM_CLASS    VARCHAR2(50) NOT NULL,   
+                SMALL_CLASS     VARCHAR2(50) NOT NULL,   
+                    CONSTRAINT PK_STOCK_INDUSTRY PRIMARY KEY (INDUSTRY_CODE)
+                    ) COMPRESS FOR OLTP;
+
+                    CREATE INDEX IX_INDUSTRY_CLASSES ON STOCK_INDUSTRY (LARGE_CLASS, MEDIUM_CLASS, SMALL_CLASS);
+
+                    COMMENT ON TABLE STOCK_INDUSTRY IS '한국거래소 표준 산업분류 기준 대/중/소 업종 마스터 테이블';
+
+                    -- 2. STOCK_MASTER (종목 마스터)
+                    CREATE TABLE STOCK_MASTER (
+                        TICKER        VARCHAR2(10) NOT NULL,  
+                            STOCK_NAME    VARCHAR2(100) NOT NULL, 
+                                MARKET_CODE   CHAR(1) NOT NULL,       
+                                    ASSET_TYPE    CHAR(1) NOT NULL,       
+                                        INDUSTRY_CODE VARCHAR2(10),           
+                                            IS_LISTED     CHAR(1) DEFAULT 'Y' NOT NULL,    
+                                                LISTED_DATE   DATE,                   
+                                                    DELISTED_DATE DATE,                   
+                                                        UPDATED_AT    DATE DEFAULT SYSDATE NOT NULL,   
+                                                            CONSTRAINT PK_STOCK_MASTER PRIMARY KEY (TICKER),
+                                                                CONSTRAINT FK_STOCK_MASTER_INDUSTRY FOREIGN KEY (INDUSTRY_CODE) REFERENCES STOCK_INDUSTRY(INDUSTRY_CODE)
+                                                                ) COMPRESS FOR OLTP;
+
+                                                                COMMENT ON COLUMN STOCK_MASTER.MARKET_CODE IS '1: KOSPI, 2: KOSDAQ, 3: KONEX';
+                                                                COMMENT ON COLUMN STOCK_MASTER.ASSET_TYPE IS 'S: General Stock, E: ETF, N: ETN';
+                                                                COMMENT ON COLUMN STOCK_MASTER.IS_LISTED IS 'Y: Listed, N: Delisted';
+
+                                                                -- 3. DAILY_PRICE (일별 및 30분 주기 시세)
+                                                                CREATE TABLE DAILY_PRICE (
+                                                                    TICKER         VARCHAR2(10) NOT NULL,  
+                                                                        PRICE_DATE     DATE NOT NULL,          
+                                                                            OPEN_PRICE     NUMBER(10) NOT NULL,    
+                                                                                HIGH_PRICE     NUMBER(10) NOT NULL,    
+                                                                                    LOW_PRICE      NUMBER(10) NOT NULL,    
+                                                                                        CLOSE_PRICE    NUMBER(10) NOT NULL,    
+                                                                                            ADJ_CLOSE      NUMBER(10, 2) NOT NULL, 
+                                                                                                VOLUME         NUMBER(15) NOT NULL,    
+                                                                                                    MARKET_CAP     NUMBER(20) NOT NULL,    
+                                                                                                        CONSTRAINT PK_DAILY_PRICE PRIMARY KEY (TICKER, PRICE_DATE),
+                                                                                                            CONSTRAINT FK_DAILY_PRICE_TICKER FOREIGN KEY (TICKER) REFERENCES STOCK_MASTER(TICKER)
+                                                                                                            ) COMPRESS FOR OLTP;
+
+                                                                                                            -- 날짜 중심의 스크리닝 및 팩터 추출용 단일 인덱스
+                                                                                                            CREATE INDEX IX_DAILY_PRICE_DATE ON DAILY_PRICE (PRICE_DATE);
+
+                                                                                                            COMMENT ON TABLE DAILY_PRICE IS '10년치 일봉 시세 및 당일 30분 주기 누적 시세 데이터 테이블';
+
+                                                                                                            -- 4. STOCK_DIVIDEND (배당 및 분배금 내역)
+                                                                                                            CREATE TABLE STOCK_DIVIDEND (
+                                                                                                                TICKER            VARCHAR2(10) NOT NULL,    
+                                                                                                                    EX_DIVIDEND_DATE  DATE NOT NULL,            
+                                                                                                                        DIVIDEND_PER_SHARE NUMBER(10, 2) NOT NULL,  
+                                                                                                                            RECORD_DATE       DATE,                     
+                                                                                                                                PAYMENT_DATE      DATE,                     
+                                                                                                                                    DIVIDEND_TYPE     CHAR(1) DEFAULT 'R' NOT NULL,      
+                                                                                                                                        CREATED_AT        DATE DEFAULT SYSDATE NOT NULL,
+                                                                                                                                            CONSTRAINT PK_STOCK_DIVIDEND PRIMARY KEY (TICKER, EX_DIVIDEND_DATE),
+                                                                                                                                                CONSTRAINT FK_STOCK_DIVIDEND_TICKER FOREIGN KEY (TICKER) REFERENCES STOCK_MASTER(TICKER)
+                                                                                                                                                ) COMPRESS FOR OLTP;
+
+                                                                                                                                                CREATE INDEX IX_STOCK_DIVIDEND_DATE ON STOCK_DIVIDEND (EX_DIVIDEND_DATE);
+
+                                                                                                                                                COMMENT ON COLUMN STOCK_DIVIDEND.DIVIDEND_TYPE IS 'R: Regular Dividend, S: Special/Interim';
+
+                                                                                                                                                -- 5. ETF_COMPONENT (ETF 포트폴리오 구성 종목 - PDF)
+                                                                                                                                                CREATE TABLE ETF_COMPONENT (
+                                                                                                                                                    ETF_TICKER         VARCHAR2(10) NOT NULL,   
+                                                                                                                                                        COMPONENT_TICKER   VARCHAR2(10) NOT NULL,   
+                                                                                                                                                            BASE_DATE          DATE NOT NULL,           
+                                                                                                                                                                WEIGHT_PCT         NUMBER(5, 2) NOT NULL,   
+                                                                                                                                                                    SHARES_HELD        NUMBER(15),              
+                                                                                                                                                                        CONSTRAINT PK_ETF_COMPONENT PRIMARY KEY (ETF_TICKER, COMPONENT_TICKER, BASE_DATE),
+                                                                                                                                                                            CONSTRAINT FK_ETF_COMP_MASTER FOREIGN KEY (ETF_TICKER) REFERENCES STOCK_MASTER(TICKER)
+                                                                                                                                                                            ) COMPRESS FOR OLTP;
+
+                                                                                                                                                                            CREATE INDEX IX_ETF_COMP_BASE_DATE ON ETF_COMPONENT (ETF_TICKER, BASE_DATE);
+
+                                                                                                                                                                            COMMENT ON TABLE ETF_COMPONENT IS '자산운용사 공시 기준 ETF 내 편입 종목 및 비중 데이터 테이블';
+                                                                                                                                                                            

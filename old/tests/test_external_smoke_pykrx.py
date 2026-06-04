@@ -2,8 +2,8 @@ import os
 
 import pytest
 
-from capybara_fetcher.providers import PykrxProvider
-from capybara_fetcher.standardize import standardize_ohlcv
+from old.capybara_fetcher.providers import PykrxProvider
+from old.capybara_fetcher.standardize import standardize_ohlcv
 
 
 @pytest.mark.external
