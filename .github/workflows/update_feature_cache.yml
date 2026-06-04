@@ -1,0 +1,340 @@
+name: Update Feature Cache
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: 'Start Date (YYYYMMDD)'
+        required: false
+        default: '20150101'
+      end_date:
+        description: 'End Date (YYYYMMDD) - Defaults to Today'
+        required: false
+        default: ''
+      provider:
+        description: 'Data Provider'
+        required: false
+        default: 'composite'
+        type: choice
+        options:
+          - composite
+          - pykrx
+          - korea_investment
+          - fdr
+  schedule:
+    # KST weekday 07:00-18:00, hourly.
+    # Runs at 07:00-08:00 KST are skipped by the check-time job (guard: KST >= 09:00).
+    # Actual releases are produced only for KST 09:00-18:00.
+    # Segment A: KST 09:00-18:00 Mon-Fri => UTC 00:00-09:00 Mon-Fri
+    - cron: '0 0-9 * * 1-5'
+    # Segment B: KST 07:00-08:00 Mon-Fri => UTC 22:00-23:00 Sun-Thu
+    - cron: '0 22-23 * * 0-4'
+
+permissions:
+  contents: write
+
+jobs:
+  check-time:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Seoul
+    outputs:
+      should_run: ${{ steps.time_check.outputs.should_run }}
+    steps:
+    - name: Check KST Time Window
+      id: time_check
+      run: |
+        KST_HOUR=$(date +'%H' | sed 's/^0//')
+        echo "Current KST hour: ${KST_HOUR}"
+        if [ "${{ github.event_name }}" = "schedule" ] && [ "${KST_HOUR}" -lt 9 ]; then
+          echo "Before 09:00 KST (hour=${KST_HOUR}), skipping scheduled run"
+          echo "should_run=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "Within window or manual dispatch, proceeding"
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+        fi
+
+  generate-cache:
+    needs: check-time
+    if: needs.check-time.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Seoul
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        cache: 'pip'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Build KRX Stock Master (JSON with FDR name updates)
+      run: |
+        python scripts/build_krx_stock_master.py --kospi-xlsx data/kospi.xlsx --kosdaq-xlsx data/kosdaq.xlsx --output-json data/krx_stock_master.json --include-etf
+
+    - name: Export KRX Stock Master (parquet)
+      run: |
+        python scripts/export_krx_stock_master_parquet.py --input-json data/krx_stock_master.json --output-parquet cache/krx_stock_master.parquet
+        
+    - name: Generate Feature Cache
+      env:
+        HT_KE: ${{ secrets.HT_KE }}
+        HT_SE: ${{ secrets.HT_SE }}
+      run: |
+        # Handle inputs with defaults
+        START_DATE="${{ inputs.start_date }}"
+        if [ -z "$START_DATE" ]; then
+          START_DATE="20150101"
+        fi
+        
+        END_DATE="${{ inputs.end_date }}"
+        if [ -z "$END_DATE" ]; then
+          END_DATE=$(date +'%Y%m%d')
+        fi
+        
+        PROVIDER="${{ inputs.provider }}"
+        if [ -z "$PROVIDER" ]; then
+          PROVIDER="composite"
+        fi
+        
+        echo "Generating cache from $START_DATE to $END_DATE using provider: $PROVIDER"
+        
+        python scripts/generate_cache.py \
+          --start-date "$START_DATE" \
+          --end-date "$END_DATE" \
+          --output cache/korea_universe_feature_frame.parquet \
+          --meta-output cache/korea_universe_feature_frame.meta.json \
+          --industry-output cache/korea_industry_feature_frame.parquet \
+          --industry-meta-output cache/korea_industry_feature_frame.meta.json \
+          --industry-benchmark universe \
+          --krx-stock-master-json data/krx_stock_master.json \
+          --provider "$PROVIDER"
+
+    - name: Validate Data Quality
+      id: validate
+      run: |
+        echo "Validating generated data before release..."
+        python scripts/validate_data.py --cache-dir cache 2> validation_errors.txt
+        VALIDATION_EXIT_CODE=$?
+        if [ $VALIDATION_EXIT_CODE -ne 0 ]; then
+          echo "validation_failed=true" >> "$GITHUB_OUTPUT"
+          echo "Validation failed with exit code: $VALIDATION_EXIT_CODE"
+        else
+          echo "validation_failed=false" >> "$GITHUB_OUTPUT"
+          echo "Validation passed successfully"
+        fi
+        exit $VALIDATION_EXIT_CODE
+
+    - name: Send Validation Failure to Telegram
+      if: failure()
+      run: |
+        # Read validation errors and send to Telegram
+        if [ -f validation_errors.txt ]; then
+          ERRORS=$(cat validation_errors.txt)
+        else
+          ERRORS="Validation failed but no error details available"
+        fi
+        
+        python scripts/send_release_stats_telegram.py \
+          --cache-dir cache \
+          --validation-failed \
+          --validation-errors "$ERRORS"
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID_TEST }}
+        
+    - name: Detect Generated Files
+      if: success()
+      id: files
+      run: |
+        if [ -f "cache/krx_stock_master.parquet" ]; then
+          echo "has_master=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has_master=false" >> "$GITHUB_OUTPUT"
+        fi
+        if [ -f "cache/korea_universe_feature_frame.parquet" ]; then
+          echo "has_feature=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has_feature=false" >> "$GITHUB_OUTPUT"
+        fi
+        if [ -f "cache/korea_universe_feature_frame.meta.json" ]; then
+          echo "has_meta=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has_meta=false" >> "$GITHUB_OUTPUT"
+        fi
+        if [ -f "cache/korea_industry_feature_frame.parquet" ]; then
+          echo "has_industry=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has_industry=false" >> "$GITHUB_OUTPUT"
+        fi
+        if [ -f "cache/korea_industry_feature_frame.meta.json" ]; then
+          echo "has_industry_meta=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has_industry_meta=false" >> "$GITHUB_OUTPUT"
+        fi
+        
+    - name: Upload Artifact (meta only)
+      if: success() && steps.files.outputs.has_meta == 'true' && steps.files.outputs.has_feature != 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: feature-cache-meta
+        path: |
+          cache/korea_universe_feature_frame.meta.json
+          cache/krx_stock_master.parquet
+        retention-days: 7
+
+    - name: Upload Artifact (full, without industry)
+      if: success() && steps.files.outputs.has_meta == 'true' && steps.files.outputs.has_feature == 'true' && steps.files.outputs.has_industry != 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: feature-cache-parquet
+        path: |
+          cache/korea_universe_feature_frame.parquet
+          cache/korea_universe_feature_frame.meta.json
+          cache/krx_stock_master.parquet
+        retention-days: 7
+
+    - name: Upload Artifact (full, with industry)
+      if: success() && steps.files.outputs.has_meta == 'true' && steps.files.outputs.has_feature == 'true' && steps.files.outputs.has_industry == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: feature-cache-parquet
+        path: |
+          cache/korea_universe_feature_frame.parquet
+          cache/korea_universe_feature_frame.meta.json
+          cache/krx_stock_master.parquet
+          cache/korea_industry_feature_frame.parquet
+          cache/korea_industry_feature_frame.meta.json
+        retention-days: 7
+
+    - name: Generate Tag Name
+      if: success()
+      id: tag
+      run: echo "tag_name=data-$(date +'%Y%m%d-%H%M')" >> $GITHUB_OUTPUT
+
+    - name: Create Release (meta only)
+      if: success() && steps.files.outputs.has_meta == 'true' && steps.files.outputs.has_feature != 'true'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.tag.outputs.tag_name }}
+        name: Feature Cache ${{ steps.tag.outputs.tag_name }} (KST)
+        files: |
+          cache/korea_universe_feature_frame.meta.json
+          cache/krx_stock_master.parquet
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create Release (full, without industry)
+      if: success() && steps.files.outputs.has_meta == 'true' && steps.files.outputs.has_feature == 'true' && steps.files.outputs.has_industry != 'true'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.tag.outputs.tag_name }}
+        name: Feature Cache ${{ steps.tag.outputs.tag_name }} (KST)
+        files: |
+          cache/korea_universe_feature_frame.parquet
+          cache/korea_universe_feature_frame.meta.json
+          cache/krx_stock_master.parquet
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create Release (full, with industry)
+      if: success() && steps.files.outputs.has_meta == 'true' && steps.files.outputs.has_feature == 'true' && steps.files.outputs.has_industry == 'true'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.tag.outputs.tag_name }}
+        name: Feature Cache ${{ steps.tag.outputs.tag_name }} (KST)
+        files: |
+          cache/korea_universe_feature_frame.parquet
+          cache/korea_universe_feature_frame.meta.json
+          cache/krx_stock_master.parquet
+          cache/korea_industry_feature_frame.parquet
+          cache/korea_industry_feature_frame.meta.json
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Send Release Stats to Telegram
+      if: success() && steps.files.outputs.has_meta == 'true'
+      run: |
+        python scripts/send_release_stats_telegram.py \
+          --cache-dir cache
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID_TEST }}
+
+    - name: Cleanup Old Releases (older than 10 days)
+      if: ${{ !cancelled() }}
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const retentionDays = 10;
+          const millisecondsPerDay = 24 * 60 * 60 * 1000;
+          // Retention window is evaluated in UTC (GitHub API timestamps are UTC).
+          const cutoff = new Date(Date.now() - retentionDays * millisecondsPerDay);
+          core.info(`Cutoff date: ${cutoff.toISOString()}`);
+
+          const releases = await github.paginate(github.rest.repos.listReleases, {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            per_page: 100,
+          });
+
+          for (const release of releases) {
+            const tagName = release.tag_name || "";
+            if (!tagName.startsWith("data-")) {
+              continue;
+            }
+
+            if (!release.published_at && release.created_at) {
+              core.warning(`Release ${tagName} has no published_at; using created_at=${release.created_at}`);
+            }
+            const publishedAt = release.published_at || release.created_at;
+            if (!publishedAt) {
+              core.warning(`Release ${tagName} has no published_at or created_at; skipping`);
+              continue;
+            }
+
+            const publishedDate = new Date(publishedAt);
+            if (publishedDate >= cutoff) {
+              continue;
+            }
+
+            core.info(`Deleting release ${release.id} (${tagName}) from ${publishedAt}`);
+            try {
+              await github.rest.repos.deleteRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: release.id,
+              });
+            } catch (error) {
+              core.warning(`Failed to delete release ${release.id} (${tagName}): ${error.message}`);
+            }
+
+            try {
+              await github.rest.git.deleteRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `tags/${tagName}`,
+              });
+              core.info(`Deleted tag ${tagName}`);
+            } catch (error) {
+              if (error?.status === 404) {
+                core.warning(`Tag ${tagName} already deleted.`);
+              } else {
+                core.warning(`Failed to delete tag ${tagName}: ${error.message}`);
+              }
+            }
+          }

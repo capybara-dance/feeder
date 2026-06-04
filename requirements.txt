@@ -1,0 +1,15 @@
+pandas>=2.0.0
+pykrx>=1.0.0
+pyarrow>=12.0.0
+tqdm>=4.65.0
+streamlit>=1.30.0
+requests>=2.31.0
+# pykrx currently imports pkg_resources (provided by setuptools).
+# pkg_resources is deprecated and may be removed in a future setuptools release,
+# so cap setuptools to avoid sudden breakage until pykrx removes the dependency.
+setuptools>=70.0.0,<81
+openpyxl>=3.1.5
+duckdb>=1.1.0
+pytest>=8.0.0
+finance-datareader>=0.9.0
+dotenv
