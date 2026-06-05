@@ -12,6 +12,8 @@ This repository contains the active implementation and a legacy reference in `ol
 ## Build Direction
 - Primary goal: replace file-release pipeline with OracleDB update pipeline.
 - Keep provider abstraction and data standardization concepts.
+- Enforce provider encapsulation: use only `CompositeProvider` at external entry points.
+- Hide `pykrx`, `korea_investment`, and `fdr` behind `CompositeProvider` internals.
 - Separate pipeline stages clearly:
   1. data fetch
   2. normalization/features

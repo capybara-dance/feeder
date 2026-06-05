@@ -44,6 +44,7 @@
 
 ## 4) 타깃 아키텍처
 - 수집/가공 계층: 기존 `provider + standardize + indicators + orchestrator` 재사용.
+- Provider 정책: 외부 진입점(CLI/스케줄러/서비스)에서는 `CompositeProvider`만 사용하고, `pykrx/korea_investment/fdr`는 Composite 내부 구현으로만 사용한다.
 - 저장 계층: Oracle 전용 Writer 모듈 추가.
 - 실행 계층: 파일 릴리즈용 CLI와 분리된 DB 동기화용 CLI 추가.
 - 운영 계층: 초기 적재(full load) + 증분 적재(incremental) 모드 제공.
@@ -94,7 +95,7 @@
 - `STOCK_MASTER`
   - `TICKER <- Code`
   - `STOCK_NAME <- Name`
-  - `MARKET_CODE`: KOSPI=1, KOSDAQ=2, KONEX=3 (그 외 정책 필요)
+  - `MARKET_CODE`: `KOSPI`/`KOSDAQ`/`KONEX` 같은 명시적 문자열 코드로 저장
   - `ASSET_TYPE`: 주식=S, ETF=E, ETN=N (판별 규칙 필요)
   - `IS_LISTED`: 기본 Y
   - `UPDATED_AT`: 적재 시각
@@ -145,3 +146,73 @@
 - 하루치 incremental 실행이 정상 동작.
 - 실행 로그에서 처리/실패 건수 및 수행시간 확인 가능.
 - 핵심 테스트(매퍼/레포지토리/통합) 통과.
+
+## 12) 단계별 실행 플랜 (작게 시작)
+
+### Step 0. 작업 원칙 고정
+- `old/`는 참조 전용으로만 사용하고 수정하지 않는다.
+- 신규 코드는 `old/` 밖에만 생성한다.
+- 각 단계는 독립 실행/검증 가능해야 다음 단계로 진행한다.
+
+### Step 1. 수집 전용 MVP (DB write 없음)  
+목표: DB 적재 전에, 필요한 데이터를 안정적으로 수집/표준화해서 메모리(DataFrame)로 확보한다.
+
+- 구현 범위
+  - 신규 엔트리포인트 초안: `scripts/sync_oracle.py` (수집만 수행)
+  - 신규 모듈 초안: `capybara_fetcher/pipeline/collect.py`
+  - 수행 기능
+    - `CompositeProvider` 단일 생성 및 주입
+    - 종목 마스터 로드
+    - 티커 목록 조회
+    - 티커별 OHLCV 수집 + 표준화
+    - (선택) 지표 계산까지 포함해 `DAILY_PRICE` 입력 후보 프레임 생성
+
+- 결과물(출력 계약)
+  - `industry_df` 입력 후보: `INDUSTRY_CODE`, `LARGE_CLASS`, `MEDIUM_CLASS`, `SMALL_CLASS`
+  - `master_df` 입력 후보: `TICKER`, `STOCK_NAME`, `MARKET_CODE`(문자열), `ASSET_TYPE`, `INDUSTRY_CODE`, `IS_LISTED`, `UPDATED_AT`
+  - `price_df` 입력 후보: `TICKER`, `PRICE_DATE`, `OPEN_PRICE`, `HIGH_PRICE`, `LOW_PRICE`, `CLOSE_PRICE`, `ADJ_CLOSE`, `VOLUME`, `MARKET_CAP`
+
+- 검증 기준
+  - CLI 1회 실행 시 세 프레임 row 수/컬럼 목록이 로그로 출력된다.
+  - 최소 N개 티커(예: 50) 제한 실행이 성공한다.
+  - `MARKET_CODE`는 숫자가 아닌 문자열(`KOSPI`/`KOSDAQ`/`KONEX`)로 유지된다.
+
+### Step 2. 매퍼 계층 구현 (DB 파라미터 변환)
+목표: DataFrame을 Oracle 바인딩 가능한 레코드(dict/tuple)로 변환한다.
+
+- 구현 범위
+  - `capybara_fetcher/db/mappers.py`
+  - 날짜/숫자/NULL 처리 규칙 고정
+  - `INDUSTRY_CODE` 생성 규칙 구현
+
+- 검증 기준
+  - 단위 테스트로 타입 변환/결측 처리/코드 생성이 재현 가능하다.
+
+### Step 3. Oracle 저장소 계층 구현 (MERGE)
+목표: 테이블별 upsert SQL과 배치 실행을 구현한다.
+
+- 구현 범위
+  - `capybara_fetcher/db/oracle_client.py`
+  - `capybara_fetcher/db/sql_templates.py`
+  - `capybara_fetcher/db/repository.py`
+
+- 검증 기준
+  - 소량 샘플(예: 1000행) upsert 성공
+  - 재실행 시 중복 없이 update 동작
+
+### Step 4. 엔드투엔드 연결 (수집 -> 매핑 -> 저장)
+목표: `scripts/sync_oracle.py`에서 full/incremental 모드까지 연결한다.
+
+### Step 5. 운영 안정화
+- 재시도/배치 실패 로그/요약 리포트/검증 SQL 자동화
+
+## 13) 바로 다음 실행 항목 (Next)
+1. Step 1 착수: `scripts/sync_oracle.py` + `capybara_fetcher/pipeline/collect.py` 스캐폴드 생성
+2. 날짜 인자/테스트 제한 인자(`--test-limit`) 먼저 구현하고 provider 선택 인자는 노출하지 않음
+3. DB 쓰기 없이 `industry_df`, `master_df`, `price_df`의 shape/컬럼 로그 출력까지 완료
+
+## 14) Provider 캡슐화 규칙
+- 외부 인터페이스에서 provider 이름 선택(`--provider`)을 허용하지 않는다.
+- 수집 파이프라인은 항상 `CompositeProvider`를 사용한다.
+- `pykrx/korea_investment/fdr`는 `CompositeProvider` 내부 private 구성요소로만 접근한다.
+- 장애 대응/폴백 전략은 Composite 내부 정책으로만 관리한다.

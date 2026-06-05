@@ -22,7 +22,7 @@ CREATE TABLE STOCK_INDUSTRY (
                     CREATE TABLE STOCK_MASTER (
                         TICKER        VARCHAR2(10) NOT NULL,  
                             STOCK_NAME    VARCHAR2(100) NOT NULL, 
-                                MARKET_CODE   CHAR(1) NOT NULL,       
+                                MARKET_CODE   VARCHAR2(10) NOT NULL,  
                                     ASSET_TYPE    CHAR(1) NOT NULL,       
                                         INDUSTRY_CODE VARCHAR2(10),           
                                             IS_LISTED     CHAR(1) DEFAULT 'Y' NOT NULL,    
@@ -33,7 +33,7 @@ CREATE TABLE STOCK_INDUSTRY (
                                                                 CONSTRAINT FK_STOCK_MASTER_INDUSTRY FOREIGN KEY (INDUSTRY_CODE) REFERENCES STOCK_INDUSTRY(INDUSTRY_CODE)
                                                                 ) COMPRESS FOR OLTP;
 
-                                                                COMMENT ON COLUMN STOCK_MASTER.MARKET_CODE IS '1: KOSPI, 2: KOSDAQ, 3: KONEX';
+                                                                COMMENT ON COLUMN STOCK_MASTER.MARKET_CODE IS 'KOSPI, KOSDAQ, KONEX';
                                                                 COMMENT ON COLUMN STOCK_MASTER.ASSET_TYPE IS 'S: General Stock, E: ETF, N: ETN';
                                                                 COMMENT ON COLUMN STOCK_MASTER.IS_LISTED IS 'Y: Listed, N: Delisted';
 

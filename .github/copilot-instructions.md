@@ -8,6 +8,8 @@
 ## Current Initiative
 - Implement OracleDB-based data update pipeline.
 - Existing file-release flow is reference behavior only.
+- Provider exposure rule: external commands/jobs must use only `CompositeProvider`.
+- Keep `pykrx`, `korea_investment`, and `fdr` as internal dependencies of `CompositeProvider`.
 
 ## Working Pattern
 1. Read `plan.md` and continue from the latest status.
