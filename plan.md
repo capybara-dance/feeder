@@ -222,3 +222,49 @@
 - 최소 필수 반영 문서: `plan.md` (진행상태, 결정사항, 다음 작업)
 - 사용자 사용법/실행 방법/운영 절차가 바뀐 경우: `README.md`도 함께 갱신한다.
 - Handoff에는 문서 반영 내역(수정 파일 경로)을 반드시 포함한다.
+
+## 16) 최근 반영 메모
+- 루트 `requirements.txt`를 생성해 Step 1 수집부 실행 필수 패키지(`pandas`, `pykrx`, `finance-datareader`)를 명시했다.
+- `scripts/run_collection_report.py`를 추가해 수집부 테스트 결과/샘플을 HTML(`reports/collection_test_report.html`)로 생성하고 텔레그램 문서 전송까지 자동화했다.
+- 시총 보강 로직(원천 시총 + pykrx 시총 병합 + `Close*SharesOutstanding` 보정 + fallback 0)을 수집 파이프라인에 적용하고, 품질 지표를 리포트에 출력하도록 반영했다.
+- `korea_investment` 마스터 기반 시총 snapshot fallback을 `CompositeProvider` 내부에 구현했다(pykrx 실패 시 사용).
+- 최근 테스트(`test-limit=10`) 기준 리포트 지표에서 `market_cap_zero_final`이 0(0.00%)으로 개선됨.
+- 데이터 항목 타입/수집 소스/구현 상태를 정리한 문서 `docs/data_dictionary.md`를 추가했다.
+- `scripts/update_data_dictionary_samples.py`를 추가해 최근 수집 결과로 `docs/data_dictionary.md` 샘플 블록을 자동 갱신하도록 구성했다.
+
+## 17) MARKET_CAP 0 문제 해결 방안
+
+### 원인 요약
+- 수집 표준화 단계에서 `MarketCap` 컬럼이 없으면 결측으로 남는다.
+- price 변환 단계에서 결측 `MARKET_CAP`를 일괄 0으로 채우고 있어 결과적으로 시총이 0으로 고정된다.
+- 추가 확인: `pykrx` 시총 조회 API가 일부 종목/구간에서 실패(응답 파싱 오류/티커 해석 오류)하여 결측이 반복 발생한다.
+
+### 목표
+- `MARKET_CAP`를 가능한 실제값으로 채우고, 불가한 경우에만 정책적으로 보정한다.
+- 0 채움은 마지막 fallback으로만 사용하고, 품질 지표(결측률/0비율)를 반드시 기록한다.
+
+### 단계별 조치
+1. 단기 조치
+  - `fillna(0)`를 즉시 제거하고 결측 상태를 유지한다.
+  - 실행 로그에 `MARKET_CAP` 결측률/0비율을 출력한다.
+2. 1차 보강
+  - `pykrx` 시세 수집 시 동일 구간의 시총 데이터를 추가 조회해 날짜 기준으로 병합한다.
+  - 병합 후에도 결측인 행만 다음 단계 보정 대상으로 분리한다.
+3. 2차 보강
+  - `master`의 `SharesOutstanding`이 존재하는 종목은 `CLOSE_PRICE * SharesOutstanding`으로 시총을 계산한다.
+  - 계산값 적용 여부를 별도 플래그(예: `MARKET_CAP_SOURCE`)로 내부 로그에 남긴다.
+4. fallback 정책
+  - 위 두 단계 후에도 결측인 경우에만 0 또는 정책값을 적용한다.
+  - 최종 0 적용 비율이 임계치(예: 5%)를 초과하면 경고 또는 실패 처리한다.
+5. 대체 API 도입(후속)
+  - `korea_investment` API를 시총 조회 대체 소스로 검증한다.
+
+## 18) TODO
+- pykrx 인증용 환경 변수(`KRX_ID`, `KRX_PW`)를 `.env` 또는 실행 환경에 설정하고, `005930`, `069500` 기준으로 pykrx 시총 조회 정상 동작을 재검증한다.
+  - `CompositeProvider` 내부에서 `pykrx -> korea_investment` 순으로 시총 조회 fallback 체인을 구성한다.
+  - 소스별 성공/실패 카운트를 리포트 지표로 기록한다.
+
+### 검증 기준
+- 샘플 실행(test-limit 50)에서 `MARKET_CAP=0` 비율이 기존 대비 유의미하게 감소한다.
+- 시총이 채워진 상위 종목(KOSPI/KOSDAQ/ETF) 샘플 10건을 리포트에 표시한다.
+- 리포트/로그에 `market_cap_missing_before`, `market_cap_missing_after`, `market_cap_zero_final` 지표를 출력한다.
