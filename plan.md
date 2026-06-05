@@ -216,3 +216,9 @@
 - 수집 파이프라인은 항상 `CompositeProvider`를 사용한다.
 - `pykrx/korea_investment/fdr`는 `CompositeProvider` 내부 private 구성요소로만 접근한다.
 - 장애 대응/폴백 전략은 Composite 내부 정책으로만 관리한다.
+
+## 15) 문서화 강제 규칙
+- 새로운 기능 추가 또는 기존 기능 동작 변경이 발생하면 같은 작업 세션에서 반드시 Markdown 문서를 갱신한다.
+- 최소 필수 반영 문서: `plan.md` (진행상태, 결정사항, 다음 작업)
+- 사용자 사용법/실행 방법/운영 절차가 바뀐 경우: `README.md`도 함께 갱신한다.
+- Handoff에는 문서 반영 내역(수정 파일 경로)을 반드시 포함한다.

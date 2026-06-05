@@ -37,3 +37,4 @@ When finishing a session, append:
 - Prefer small, reviewable changes.
 - Preserve existing public interfaces unless migration requires explicit changes.
 - Add tests for new behavior where practical.
+- Whenever a new feature is added or an existing feature behavior changes, update relevant markdown docs in the same session (at minimum `plan.md`, and `README.md` if usage/operation changed).

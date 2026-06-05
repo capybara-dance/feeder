@@ -16,6 +16,7 @@
 2. Keep changes isolated and incremental.
 3. Add or update tests for each meaningful unit.
 4. Summarize outcomes with file paths and validation steps.
+5. If a feature is added or behavior changes, update markdown docs in the same work item (`plan.md` required, `README.md` when user-facing usage/operation changed).
 
 ## Persistence Strategy Across Agents
 - Use `plan.md` as the single source of truth for progress and handoff.
