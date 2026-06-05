@@ -5,7 +5,6 @@
 이 프로젝트에는 신규 구현 텔레그램 전송 모듈이 포함되어 있습니다.
 
 - 모듈 위치: `capybara_fetcher/notifications/telegram_sender.py`
-- 테스트 스크립트: `scripts/send_hello_telegram.py`
 
 ### 1) 환경 변수 설정
 
@@ -61,7 +60,7 @@ sender.send_html_file("./report.html", caption="daily html report")
 아래 명령으로 텍스트 메시지 `hello capybara`를 전송할 수 있습니다.
 
 ```bash
-/workspaces/feeder/.venv/bin/python scripts/send_hello_telegram.py
+/workspaces/feeder/.venv/bin/python -c "from capybara_fetcher.notifications import TelegramSender; print(TelegramSender().send_text('hello capybara'))"
 ```
 
-정상 전송 시 콘솔에 `Telegram send succeeded`가 출력됩니다.
+정상 전송 시 응답 JSON에서 `ok: true`를 확인할 수 있습니다.
