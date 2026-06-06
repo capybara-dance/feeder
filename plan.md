@@ -272,3 +272,31 @@
 - 샘플 실행(test-limit 50)에서 `MARKET_CAP=0` 비율이 기존 대비 유의미하게 감소한다.
 - 시총이 채워진 상위 종목(KOSPI/KOSDAQ/ETF) 샘플 10건을 리포트에 표시한다.
 - 리포트/로그에 `market_cap_missing_before`, `market_cap_missing_after`, `market_cap_zero_final` 지표를 출력한다.
+
+## 19) 예외 삼킴 개선 및 관측성 강화 계획
+
+### 배경
+- 현재 `CompositeProvider` 등 일부 경로에서 `except Exception: pass` 패턴이 존재해, 소스 장애 원인 추적이 어렵다.
+- 배치 실행 시 특정 티커에서 오류가 발생해도 원인/건수/영향 범위를 구조적으로 파악하기 어렵다.
+
+### 목표
+- 예외를 무시하지 않고 최소한 구조화 로그로 남긴다.
+- 티커 단위 실패를 격리해 전체 수집은 지속하되, 실패 통계와 원인을 리포트 가능하게 만든다.
+
+### 단계별 조치
+1. 예외 처리 규칙 정비
+  - `except Exception: pass`를 제거하고 `logger.warning` 또는 `logger.exception`으로 대체한다.
+  - 로그 필드에 `provider`, `ticker`, `stage`, `error_type`, `message`를 포함한다.
+2. 실패 격리
+  - 병렬/직렬 수집 모두에서 티커 단위 try-catch를 적용한다.
+  - 실패 티커는 스킵하고 나머지 티커 수집은 계속 수행한다.
+3. 메트릭 집계
+  - 소스별 성공/실패 카운트(`pykrx`, `fdr`, `korea_investment`, `yfinance`)를 `quality_metrics`에 추가한다.
+  - 실패 Top-N 티커와 stage별 오류 건수를 실행 요약에 포함한다.
+4. 리포트 노출
+  - `run_collection_report.py` HTML에 실패 요약 카드(총 실패건, 소스별 실패율, 상위 오류 유형)를 추가한다.
+
+### 검증 기준
+- 장애 유도 테스트(의도적 잘못된 티커/네트워크 실패)에서 전체 잡이 중단되지 않고 완료된다.
+- 로그에서 최소 1건 이상의 실패가 구조화 필드와 함께 확인된다.
+- 리포트에 소스별 성공/실패 지표가 노출된다.
