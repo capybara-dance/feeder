@@ -109,6 +109,24 @@ sender.send_html_file("./report.html", caption="daily html report")
 - `market_cap_missing_after_enrichment`
 - `market_cap_zero_final`
 
+## GitHub Actions 실행
+
+수집 리포트 실행 워크플로는 아래 파일에 추가되어 있습니다.
+
+- `.github/workflows/run_collection_report.yml`
+
+동작 방식:
+- 수동 실행: GitHub Actions에서 `Run Collection Report`를 `workflow_dispatch`로 실행
+- 자동 실행: `scripts/run_collection_report.py` 파일에 커밋(push) 발생 시 자동 실행
+
+환경 변수 설정:
+- `.env`의 각 키를 동일한 이름의 Repository Secret으로 각각 저장
+- 워크플로에서 각 Secret을 job `env`로 직접 매핑해 런타임 환경 변수로 사용
+
+참고:
+- 텔레그램 전송을 사용하려면 `.env`에 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID_TEST` 등이 포함되어 있어야 합니다.
+- 실행 결과 HTML은 artifact `collection-test-report`로 업로드됩니다.
+
 시총 보강 순서:
 1. 원천 데이터의 시총 컬럼 사용
 2. pykrx 시총 조회 결과 병합

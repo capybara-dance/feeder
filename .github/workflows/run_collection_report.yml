@@ -1,0 +1,95 @@
+name: Run Collection Report
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: Start date (YYYY-MM-DD)
+        required: false
+        type: string
+      end_date:
+        description: End date (YYYY-MM-DD)
+        required: false
+        type: string
+      test_limit:
+        description: Number of tickers for test run
+        required: false
+        default: "5"
+        type: string
+      max_workers:
+        description: Parallel workers
+        required: false
+        default: "1"
+        type: string
+      market:
+        description: Market filter (KOSPI/KOSDAQ/ETF)
+        required: false
+        default: ""
+        type: string
+      caption:
+        description: Telegram caption
+        required: false
+        default: collection test report
+        type: string
+
+  push:
+    paths:
+      - scripts/run_collection_report.py
+
+jobs:
+  run-report:
+    runs-on: ubuntu-latest
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID_TEST: ${{ secrets.TELEGRAM_CHAT_ID_TEST }}
+      TELEGRAM_CHAT_ID_STOCK: ${{ secrets.TELEGRAM_CHAT_ID_STOCK }}
+      HT_KEY: ${{ secrets.HT_KEY }}
+      HT_SE: ${{ secrets.HT_SE }}
+      OCI_WALLET: ${{ secrets.OCI_WALLET }}
+      OCI_WALLET_PW: ${{ secrets.OCI_WALLET_PW }}
+      OCI_DB_PW: ${{ secrets.OCI_DB_PW }}
+      KRX_ID: ${{ secrets.KRX_ID }}
+      KRX_PW: ${{ secrets.KRX_PW }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build run arguments
+        id: args
+        shell: bash
+        run: |
+          ARGS="--output-html reports/collection_test_report.html"
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            if [[ -n "${{ inputs.start_date }}" ]]; then ARGS+=" --start-date ${{ inputs.start_date }}"; fi
+            if [[ -n "${{ inputs.end_date }}" ]]; then ARGS+=" --end-date ${{ inputs.end_date }}"; fi
+            if [[ -n "${{ inputs.test_limit }}" ]]; then ARGS+=" --test-limit ${{ inputs.test_limit }}"; fi
+            if [[ -n "${{ inputs.max_workers }}" ]]; then ARGS+=" --max-workers ${{ inputs.max_workers }}"; fi
+            if [[ -n "${{ inputs.market }}" ]]; then ARGS+=" --market ${{ inputs.market }}"; fi
+            if [[ -n "${{ inputs.caption }}" ]]; then ARGS+=" --caption \"${{ inputs.caption }}\""; fi
+          fi
+
+          echo "args=${ARGS}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run collection report
+        shell: bash
+        run: |
+          python scripts/run_collection_report.py ${{ steps.args.outputs.args }}
+
+      - name: Upload html artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: collection-test-report
+          path: reports/collection_test_report.html
+          if-no-files-found: error

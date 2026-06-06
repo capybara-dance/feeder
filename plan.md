@@ -226,6 +226,7 @@
 ## 16) 최근 반영 메모
 - 루트 `requirements.txt`를 생성해 Step 1 수집부 실행 필수 패키지(`pandas`, `pykrx`, `finance-datareader`)를 명시했다.
 - `scripts/run_collection_report.py`를 추가해 수집부 테스트 결과/샘플을 HTML(`reports/collection_test_report.html`)로 생성하고 텔레그램 문서 전송까지 자동화했다.
+- `.github/workflows/run_collection_report.yml`을 추가해 `scripts/run_collection_report.py` 변경 커밋 시 자동 실행되도록 했고, `workflow_dispatch` 수동 실행도 지원하도록 구성했다. 또한 `.env`의 각 키를 동일한 이름의 Repository Secret으로 저장해 job `env`에 직접 매핑하도록 반영했다.
 - 시총 보강 로직(원천 시총 + pykrx 시총 병합 + `Close*SharesOutstanding` 보정 + fallback 0)을 수집 파이프라인에 적용하고, 품질 지표를 리포트에 출력하도록 반영했다.
 - `korea_investment` 마스터 기반 시총 snapshot fallback을 `CompositeProvider` 내부에 구현했다(pykrx 실패 시 사용).
 - 최근 테스트(`test-limit=10`) 기준 리포트 지표에서 `market_cap_zero_final`이 0(0.00%)으로 개선됨.
