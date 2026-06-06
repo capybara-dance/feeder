@@ -47,7 +47,9 @@ jobs:
       HT_SE: ${{ secrets.HT_SE }}
       OCI_WALLET: ${{ secrets.OCI_WALLET }}
       OCI_WALLET_PW: ${{ secrets.OCI_WALLET_PW }}
+      OCI_DB_USER: ${{ secrets.OCI_DB_USER }}
       OCI_DB_PW: ${{ secrets.OCI_DB_PW }}
+      OCI_DB_DSN: ${{ secrets.OCI_DB_DSN }}
       KRX_ID: ${{ secrets.KRX_ID }}
       KRX_PW: ${{ secrets.KRX_PW }}
 

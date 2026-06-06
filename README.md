@@ -85,29 +85,38 @@ sender.send_html_file("./report.html", caption="daily html report")
 
 정상 전송 시 응답 JSON에서 `ok: true`를 확인할 수 있습니다.
 
-## 수집부 테스트 리포트(HTML) 생성 및 텔레그램 전송
+## DB 샘플 리포트(HTML) 생성 및 텔레그램 전송
 
-수집부 동작을 테스트하고 결과/샘플 데이터를 HTML 리포트로 만든 뒤 텔레그램으로 전송할 수 있습니다.
+Oracle DB의 각 테이블 일부 데이터를 조회해 HTML 리포트를 만든 뒤 텔레그램으로 전송할 수 있습니다.
 
 - 실행 스크립트: `scripts/run_collection_report.py`
 - 기본 출력 파일: `reports/collection_test_report.html`
 
 ```bash
 /workspaces/feeder/.venv/bin/python scripts/run_collection_report.py \
-	--test-limit 5 \
-	--max-workers 1 \
+	--sample-rows 15 \
 	--output-html reports/collection_test_report.html
 ```
 
 옵션:
 - `--no-send`: HTML 생성만 수행하고 텔레그램 전송은 생략
-- `--start-date`, `--end-date`: 수집 기간 지정
-- `--market`: KOSPI/KOSDAQ/ETF 등 시장 필터
+- `--sample-rows`: 각 테이블 샘플 행 수
 
-리포트에는 시총 품질 지표가 함께 포함됩니다.
-- `market_cap_missing_before`
-- `market_cap_missing_after_enrichment`
-- `market_cap_zero_final`
+필수 DB 환경 변수:
+- `OCI_DB_USER`
+- `OCI_DB_PW`
+- `OCI_DB_DSN`
+
+선택(ATP Wallet):
+- `OCI_WALLET`
+- `OCI_WALLET_PW`
+
+리포트 대상 테이블:
+- `STOCK_INDUSTRY`
+- `STOCK_MASTER`
+- `DAILY_PRICE`
+- `STOCK_DIVIDEND`
+- `ETF_COMPONENT`
 
 배당 수집:
 - 내부 `yfinance` provider를 통해 티커별 배당 내역을 조회해 `dividend_df`를 생성합니다.
@@ -131,6 +140,59 @@ sender.send_html_file("./report.html", caption="daily html report")
 참고:
 - 텔레그램 전송을 사용하려면 `.env`에 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID_TEST` 등이 포함되어 있어야 합니다.
 - 실행 결과 HTML은 artifact `collection-test-report`로 업로드됩니다.
+
+## Oracle DB 적재 실행
+
+현재 구현 완료된 수집 데이터(`STOCK_INDUSTRY`, `STOCK_MASTER`, `DAILY_PRICE`, `STOCK_DIVIDEND`)를 OracleDB로 upsert할 수 있습니다.
+
+- 실행 스크립트: `scripts/sync_oracle.py`
+
+필수 환경 변수:
+- `OCI_DB_USER`
+- `OCI_DB_PW`
+- `OCI_DB_DSN`
+
+선택 환경 변수(ATP/Wallet 연결 시):
+- `OCI_WALLET` (base64 인코딩된 wallet zip)
+- `OCI_WALLET_PW`
+
+실행 예시:
+
+```bash
+/workspaces/feeder/.venv/bin/python scripts/sync_oracle.py \
+	--mode full-10y \
+	--test-limit 100 \
+	--max-workers 1 \
+	--batch-size 2000
+```
+
+기본 일일 모드:
+- `--mode daily` (기본)
+- 기본적으로 KST 기준 당일 데이터를 수집/업서트
+- DB `DAILY_PRICE`를 조회해 `오늘-10일` 구간의 영업일 누락 데이터가 있으면 해당 날짜도 함께 재수집/업데이트
+
+범위 지정 모드:
+
+```bash
+/workspaces/feeder/.venv/bin/python scripts/sync_oracle.py \
+	--mode range \
+	--start-date 2024-01-01 \
+	--end-date 2024-01-31
+```
+
+드라이런(수집만 수행, DB 반영 없음):
+
+```bash
+/workspaces/feeder/.venv/bin/python scripts/sync_oracle.py --dry-run
+```
+
+### Oracle 적재 워크플로
+
+- 파일: `.github/workflows/sync_oracle.yml`
+- 트리거:
+	- 스케줄: 매일 21:00 KST 자동 실행
+	- 수동: `workflow_dispatch`로 실행 가능
+- 수동 실행 시 `run_mode`로 `daily`, `full-10y`, `range` 선택 가능
 
 시총 보강 순서:
 1. 원천 데이터의 시총 컬럼 사용
