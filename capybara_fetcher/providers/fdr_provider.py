@@ -68,24 +68,14 @@ class FdrProvider:
         ticker_code = str(ticker).zfill(6)
         if self.source.upper() == "KRX":
             symbol = f"KRX:{ticker_code}"
-            fallback_symbol = f"NAVER:{ticker_code}"
         elif self.source.upper() == "NAVER":
             symbol = f"NAVER:{ticker_code}"
-            fallback_symbol = None
         elif self.source.upper() == "YAHOO":
             symbol = f"NAVER:{ticker_code}"
-            fallback_symbol = None
         else:
             symbol = ticker_code
-            fallback_symbol = None
 
-        try:
-            df = fdr.DataReader(symbol)
-        except ValueError as e:
-            if fallback_symbol and "is not supported" in str(e):
-                df = fdr.DataReader(fallback_symbol)
-            else:
-                raise
+        df = fdr.DataReader(symbol)
 
         if df is None or df.empty:
             return pd.DataFrame()

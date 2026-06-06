@@ -14,6 +14,11 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from scripts.dotenv_loader import load_dotenv_if_present
+
+
+load_dotenv_if_present(Path(REPO_ROOT) / ".env")
+
 from capybara_fetcher.db import OracleClient, OracleRepository
 from capybara_fetcher.notifications import TelegramSender
 from capybara_fetcher.pipeline import CollectionConfig, collect_data
@@ -28,23 +33,6 @@ def _to_iso_date(v: str) -> str:
         return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
     dt.date.fromisoformat(s)
     return s
-
-
-def _load_dotenv(dotenv_path: str = ".env") -> None:
-    """Load simple KEY=VALUE pairs from .env into process env if absent."""
-    p = Path(dotenv_path)
-    if not p.exists():
-        return
-
-    for line in p.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, raw = stripped.split("=", 1)
-        key = key.strip()
-        if not key or key in os.environ:
-            continue
-        os.environ[key] = raw.strip().strip('"').strip("'")
 
 
 def _today_kst() -> dt.date:
@@ -302,15 +290,13 @@ def _filter_dates(result, target_dates: set[dt.date] | None):
 
 
 def main() -> None:
-    _load_dotenv(".env")
-
     parser = argparse.ArgumentParser(description="Collect data and upsert into OracleDB")
     parser.add_argument("--mode", choices=["daily", "full-10y", "range"], default="daily")
     parser.add_argument("--lookback-days", type=int, default=10, help="In daily mode, check missing business dates in [today-lookback, today]")
     parser.add_argument("--start-date", type=str, default=None, help="Required when mode=range; format YYYYMMDD or YYYY-MM-DD")
     parser.add_argument("--end-date", type=str, default=None, help="Required when mode=range; format YYYYMMDD or YYYY-MM-DD")
     parser.add_argument("--test-limit", type=int, default=0)
-    parser.add_argument("--max-workers", type=int, default=4)
+    parser.add_argument("--max-workers", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=2000)
     parser.add_argument("--market", type=str, default=None, help="Optional market filter, e.g. KOSPI/KOSDAQ/ETF")
     parser.add_argument("--master-json-path", type=str, default=None, help="Optional stock master json path")

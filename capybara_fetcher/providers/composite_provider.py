@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass, field
+import logging
+import threading
 
 import pandas as pd
 
@@ -11,6 +13,9 @@ from .korea_investment_provider import KoreaInvestmentProvider
 from .master_json_provider import MasterJsonProvider
 from .pykrx_provider import PykrxProvider
 from .yfinance_provider import YFinanceProvider
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -24,6 +29,9 @@ class CompositeProvider(DataProvider):
     _pykrx_provider: PykrxProvider = field(default=None, init=False, repr=False, compare=False)
     _korea_investment_provider: KoreaInvestmentProvider = field(default=None, init=False, repr=False, compare=False)
     _yfinance_provider: YFinanceProvider = field(default=None, init=False, repr=False, compare=False)
+    _pykrx_lock: threading.Lock = field(default=None, init=False, repr=False, compare=False)
+    _pykrx_ohlcv_available: bool | None = field(default=None, init=False, repr=False, compare=False)
+    _pykrx_market_cap_available: bool | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_master_provider", MasterJsonProvider(master_json_path=self.master_json_path))
@@ -31,6 +39,19 @@ class CompositeProvider(DataProvider):
         object.__setattr__(self, "_pykrx_provider", PykrxProvider())
         object.__setattr__(self, "_korea_investment_provider", KoreaInvestmentProvider())
         object.__setattr__(self, "_yfinance_provider", YFinanceProvider())
+        object.__setattr__(self, "_pykrx_lock", threading.Lock())
+
+    def _fallback_ohlcv(self, *, ticker: str, start_date: str, end_date: str, adjusted: bool) -> pd.DataFrame:
+        fdr_provider = object.__getattribute__(self, "_fdr_provider")
+        return fdr_provider.fetch_ohlcv(
+            ticker=ticker,
+            start_date=start_date,
+            end_date=end_date,
+            adjusted=adjusted,
+        )
+
+    def _fallback_market_cap(self) -> pd.DataFrame:
+        return pd.DataFrame()
 
     def load_stock_master(self, *, asof_date: dt.date | None = None) -> pd.DataFrame:
         master = object.__getattribute__(self, "_master_provider")
@@ -62,6 +83,40 @@ class CompositeProvider(DataProvider):
         adjusted: bool = True,
     ) -> pd.DataFrame:
         pykrx_provider = object.__getattribute__(self, "_pykrx_provider")
+        lock = object.__getattribute__(self, "_pykrx_lock")
+        pykrx_available = object.__getattribute__(self, "_pykrx_ohlcv_available")
+
+        if pykrx_available is False:
+            return self._fallback_ohlcv(ticker=ticker, start_date=start_date, end_date=end_date, adjusted=adjusted)
+
+        if pykrx_available is None:
+            with lock:
+                pykrx_available = object.__getattribute__(self, "_pykrx_ohlcv_available")
+                if pykrx_available is None:
+                    try:
+                        df = pykrx_provider.fetch_ohlcv(
+                            ticker=ticker,
+                            start_date=start_date,
+                            end_date=end_date,
+                            adjusted=adjusted,
+                        )
+                        if df is not None and not df.empty:
+                            object.__setattr__(self, "_pykrx_ohlcv_available", True)
+                            return df
+                    except Exception as exc:
+                        object.__setattr__(self, "_pykrx_ohlcv_available", False)
+                        logger.warning("pykrx OHLCV disabled for this run after failure: %s", exc)
+                        return self._fallback_ohlcv(
+                            ticker=ticker,
+                            start_date=start_date,
+                            end_date=end_date,
+                            adjusted=adjusted,
+                        )
+                pykrx_available = object.__getattribute__(self, "_pykrx_ohlcv_available")
+
+        if pykrx_available is False:
+            return self._fallback_ohlcv(ticker=ticker, start_date=start_date, end_date=end_date, adjusted=adjusted)
+
         try:
             df = pykrx_provider.fetch_ohlcv(
                 ticker=ticker,
@@ -71,16 +126,11 @@ class CompositeProvider(DataProvider):
             )
             if df is not None and not df.empty:
                 return df
-        except Exception:
-            pass
+        except Exception as exc:
+            object.__setattr__(self, "_pykrx_ohlcv_available", False)
+            logger.warning("pykrx OHLCV disabled for this run after failure: %s", exc)
 
-        fdr_provider = object.__getattribute__(self, "_fdr_provider")
-        return fdr_provider.fetch_ohlcv(
-            ticker=ticker,
-            start_date=start_date,
-            end_date=end_date,
-            adjusted=adjusted,
-        )
+        return self._fallback_ohlcv(ticker=ticker, start_date=start_date, end_date=end_date, adjusted=adjusted)
 
     def fetch_market_cap(
         self,
@@ -90,6 +140,34 @@ class CompositeProvider(DataProvider):
         end_date: str,
     ) -> pd.DataFrame:
         pykrx_provider = object.__getattribute__(self, "_pykrx_provider")
+        lock = object.__getattribute__(self, "_pykrx_lock")
+        pykrx_available = object.__getattribute__(self, "_pykrx_market_cap_available")
+
+        if pykrx_available is False:
+            return self._fallback_market_cap()
+
+        if pykrx_available is None:
+            with lock:
+                pykrx_available = object.__getattribute__(self, "_pykrx_market_cap_available")
+                if pykrx_available is None:
+                    try:
+                        df = pykrx_provider.fetch_market_cap(
+                            ticker=ticker,
+                            start_date=start_date,
+                            end_date=end_date,
+                        )
+                        if df is not None and not df.empty:
+                            object.__setattr__(self, "_pykrx_market_cap_available", True)
+                            return df
+                    except Exception as exc:
+                        object.__setattr__(self, "_pykrx_market_cap_available", False)
+                        logger.warning("pykrx market cap disabled for this run after failure: %s", exc)
+                        return self._fallback_market_cap()
+                pykrx_available = object.__getattribute__(self, "_pykrx_market_cap_available")
+
+        if pykrx_available is False:
+            return self._fallback_market_cap()
+
         try:
             df = pykrx_provider.fetch_market_cap(
                 ticker=ticker,
@@ -98,10 +176,11 @@ class CompositeProvider(DataProvider):
             )
             if df is not None and not df.empty:
                 return df
-        except Exception:
-            pass
+        except Exception as exc:
+            object.__setattr__(self, "_pykrx_market_cap_available", False)
+            logger.warning("pykrx market cap disabled for this run after failure: %s", exc)
 
-        return pd.DataFrame()
+        return self._fallback_market_cap()
 
     def fetch_market_cap_snapshot(self, *, ticker: str) -> float | None:
         kis_provider = object.__getattribute__(self, "_korea_investment_provider")
