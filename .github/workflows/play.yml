@@ -1,0 +1,71 @@
+name: Run play.py
+
+on:
+  push:
+    paths:
+      - play.py
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: '시작일 (YYYYMMDD, 기본: 30일 전)'
+        required: false
+        default: ''
+      end_date:
+        description: '종료일 (YYYYMMDD, 기본: 오늘)'
+        required: false
+        default: ''
+      index_codes:
+        description: '지수 코드 (콤마 구분, 기본: 1001,2001)'
+        required: false
+        default: '1001,2001'
+      detail:
+        description: '일별 상세 데이터도 전송 (true/false)'
+        required: false
+        default: 'false'
+
+jobs:
+  play:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build args
+        id: args
+        run: |
+          EXTRA_ARGS=""
+
+          START="${{ github.event.inputs.start_date }}"
+          END="${{ github.event.inputs.end_date }}"
+          CODES="${{ github.event.inputs.index_codes }}"
+          DETAIL="${{ github.event.inputs.detail }}"
+
+          if [ -n "$START" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --start-date $START"
+          fi
+          if [ -n "$END" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --end-date $END"
+          fi
+          if [ -n "$CODES" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --index-codes $CODES"
+          fi
+          if [ "$DETAIL" = "true" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --detail"
+          fi
+
+          echo "extra_args=$EXTRA_ARGS" >> $GITHUB_OUTPUT
+
+      - name: Run play.py
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID_TEST: ${{ secrets.TELEGRAM_CHAT_ID_TEST }}
+        run: python play.py ${{ steps.args.outputs.extra_args }}

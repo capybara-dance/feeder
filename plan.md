@@ -223,6 +223,21 @@
 - 사용자 사용법/실행 방법/운영 절차가 바뀐 경우: `README.md`도 함께 갱신한다.
 - Handoff에는 문서 반영 내역(수정 파일 경로)을 반드시 포함한다.
 
+## 20) play.py 및 GitHub Actions 워크플로 추가
+
+### 구현 내용
+- `play.py`: 리포 루트에 리포트 생성 및 텔레그램 전송을 담당하는 단일 진입점 스크립트 추가.
+  - `get_index_fundamental()` 기반 지수 기초 지표(PER/PBR/배당수익률) 수집
+  - 요약 리포트 + 선택적 일별 상세 데이터 텔레그램 전송
+  - `--start-date`, `--end-date`, `--index-codes`, `--detail`, `--no-send` 인자 지원
+- `.github/workflows/play.yml`: `play.py` 파일 변경(push) 시 자동 실행 + 수동 트리거(`workflow_dispatch`) 지원
+  - 수동 실행 시 `start_date`, `end_date`, `index_codes`, `detail` 파라미터 지정 가능
+  - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID_TEST` 시크릿 사용
+
+### 시크릿 설정 필요 (GitHub Settings > Secrets and variables > Actions)
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID_TEST`
+
 ## 16) 최근 반영 메모
 - 루트 `requirements.txt`를 생성해 Step 1 수집부 실행 필수 패키지(`pandas`, `pykrx`, `finance-datareader`)를 명시했다.
 - `scripts/run_collection_report.py`를 추가해 수집부 테스트 결과/샘플을 HTML(`reports/collection_test_report.html`)로 생성하고 텔레그램 문서 전송까지 자동화했다.
