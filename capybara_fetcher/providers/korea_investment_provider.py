@@ -32,23 +32,37 @@ class KoreaInvestmentProvider:
             return {}
 
         df = pd.concat(frames, ignore_index=True)
-        cap_col = None
+        if "단축코드" not in df.columns:
+            return {}
+
+        base_price_col = "기준가" if "기준가" in df.columns else None
+        listed_shares_col = "상장주수" if "상장주수" in df.columns else None
+        raw_cap_col = None
         if "시가총액" in df.columns:
-            cap_col = "시가총액"
+            raw_cap_col = "시가총액"
         else:
             for c in df.columns:
                 if "시가총액" in str(c):
-                    cap_col = c
+                    raw_cap_col = c
                     break
 
-        if cap_col is None:
-            return {}
+        out = df[["단축코드"]].copy()
+        if base_price_col and listed_shares_col:
+            base_price = pd.to_numeric(df[base_price_col], errors="coerce")
+            listed_shares = pd.to_numeric(df[listed_shares_col], errors="coerce")
+            recalculated_cap = base_price * listed_shares * 1000
+            out["MARKET_CAP"] = recalculated_cap.where(recalculated_cap > 0)
+        else:
+            out["MARKET_CAP"] = pd.Series([pd.NA] * len(out), index=out.index)
 
-        out = df[["단축코드", cap_col]].copy()
+        if raw_cap_col is not None:
+            raw_cap = pd.to_numeric(df[raw_cap_col], errors="coerce")
+            out["MARKET_CAP"] = out["MARKET_CAP"].combine_first(raw_cap)
+
         out["단축코드"] = out["단축코드"].astype(str).str.strip().str.zfill(6)
-        out[cap_col] = pd.to_numeric(out[cap_col], errors="coerce")
-        out = out.dropna(subset=["단축코드", cap_col]).drop_duplicates(subset=["단축코드"], keep="first")
-        return dict(zip(out["단축코드"], out[cap_col].astype(float)))
+        out["MARKET_CAP"] = pd.to_numeric(out["MARKET_CAP"], errors="coerce")
+        out = out.dropna(subset=["단축코드", "MARKET_CAP"]).drop_duplicates(subset=["단축코드"], keep="first")
+        return dict(zip(out["단축코드"], out["MARKET_CAP"].astype(float)))
 
     def _parse_master(self, *, url: str, zip_name: str, mst_name: str, suffix_len: int, widths: list[int], columns: list[str]) -> pd.DataFrame:
         with tempfile.TemporaryDirectory() as tmp:
@@ -145,7 +159,12 @@ class KoreaInvestmentProvider:
         )
 
     def fetch_market_cap_snapshot(self, ticker: str) -> float | None:
-        """Return current market-cap snapshot from KIS master files."""
+        """Return recalc'd market-cap snapshot from KIS master files.
+
+        Uses base price * listed shares * 1000 when available, and only
+        falls back to the raw file field when the derived value cannot be
+        computed.
+        """
         code = str(ticker).zfill(6)
         snapshot_map = self._snapshot_map_cached()
         return snapshot_map.get(code)

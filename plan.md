@@ -231,6 +231,7 @@
 - 최근 테스트(`test-limit=10`) 기준 리포트 지표에서 `market_cap_zero_final`이 0(0.00%)으로 개선됨.
 - 데이터 항목 타입/수집 소스/구현 상태를 정리한 문서 `docs/data_dictionary.md`를 추가했다.
 - `scripts/update_data_dictionary_samples.py`를 추가해 최근 수집 결과로 `docs/data_dictionary.md` 샘플 블록을 자동 갱신하도록 구성했다.
+- KIS 시총 fallback을 원본 `시가총액` 필드 대신 `기준가 × 상장주수 × 1000` 재계산값으로 사용하도록 바꿨다.
 
 ## 17) MARKET_CAP 0 문제 해결 방안
 

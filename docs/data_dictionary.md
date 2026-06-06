@@ -8,7 +8,7 @@
 | Source | Provider (internal) | Primary Use | Current Role |
 |---|---|---|---|
 | pykrx | `PykrxProvider` | OHLCV, market cap (time-series) | 1st source for price and market cap |
-| Korea Investment (KIS) master | `KoreaInvestmentProvider` | market cap snapshot fallback | 2nd fallback when pykrx market cap fails |
+| Korea Investment (KIS) master | `KoreaInvestmentProvider` | market cap snapshot fallback | 2nd fallback when pykrx market cap fails; derived from `기준가 × 상장주수 × 1000` |
 | FinanceDataReader | `FdrProvider` | ticker list, OHLCV fallback | ticker universe + OHLCV fallback |
 | Local master JSON | `MasterJsonProvider` | stock master canonical map | stock/industry mapping and shares outstanding |
 
@@ -68,7 +68,7 @@ Market cap enrichment chain:
 1. Native market-cap column from source data
 2. pykrx market-cap time-series merge
 3. `CLOSE_PRICE * SharesOutstanding` fill
-4. KIS market-cap snapshot fallback
+4. KIS market-cap snapshot fallback (`기준가 × 상장주수 × 1000`)
 5. final fallback to 0 only if still missing
 
 Quality metrics currently emitted:
