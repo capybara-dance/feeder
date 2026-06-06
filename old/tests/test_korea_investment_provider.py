@@ -5,7 +5,7 @@ import os
 import pytest
 import pandas as pd
 from pathlib import Path
-from capybara_fetcher.providers import KoreaInvestmentProvider
+from old.capybara_fetcher.providers import KoreaInvestmentProvider
 
 
 @pytest.fixture

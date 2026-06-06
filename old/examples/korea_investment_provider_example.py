@@ -5,7 +5,7 @@ This example demonstrates how to use the KoreaInvestmentProvider
 to fetch OHLCV data using Korea Investment Securities Open Trading API.
 """
 import os
-from capybara_fetcher.providers import KoreaInvestmentProvider
+from old.capybara_fetcher.providers import KoreaInvestmentProvider
 
 # Create provider instance
 # In production, credentials should come from environment variables or repo secrets

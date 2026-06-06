@@ -4,7 +4,7 @@ Tests for FDR (FinanceDataReader) provider.
 import pytest
 import pandas as pd
 from pathlib import Path
-from capybara_fetcher.providers import FdrProvider
+from old.capybara_fetcher.providers import FdrProvider
 
 
 @pytest.fixture

@@ -10,7 +10,7 @@ import FinanceDataReader as fdr
 # Add the parent directory to the path to import from capybara_fetcher
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from capybara_fetcher.providers.fdr_provider import FdrProvider
+from old.capybara_fetcher.providers.fdr_provider import FdrProvider
 
 
 def _read_master_xlsx(path: Path, market: str) -> pd.DataFrame:

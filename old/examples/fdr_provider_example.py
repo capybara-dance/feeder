@@ -3,7 +3,7 @@ Example usage of FdrProvider (FinanceDataReader).
 
 This script demonstrates how to use the FDR provider to fetch stock data.
 """
-from capybara_fetcher.providers import FdrProvider
+from old.capybara_fetcher.providers import FdrProvider
 
 # Create FDR provider instance with default KRX source
 provider = FdrProvider(
