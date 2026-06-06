@@ -35,7 +35,7 @@ class CompositeProvider(DataProvider):
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_master_provider", MasterJsonProvider(master_json_path=self.master_json_path))
-        object.__setattr__(self, "_fdr_provider", FdrProvider(source="KRX"))
+        object.__setattr__(self, "_fdr_provider", FdrProvider(source="NAVER"))
         object.__setattr__(self, "_pykrx_provider", PykrxProvider())
         object.__setattr__(self, "_korea_investment_provider", KoreaInvestmentProvider())
         object.__setattr__(self, "_yfinance_provider", YFinanceProvider())
@@ -52,6 +52,11 @@ class CompositeProvider(DataProvider):
 
     def _fallback_market_cap(self) -> pd.DataFrame:
         return pd.DataFrame()
+
+    @staticmethod
+    def _is_pykrx_compatible_ticker(ticker: str) -> bool:
+        ticker_code = str(ticker).strip()
+        return ticker_code.isdigit() and len(ticker_code) == 6
 
     def load_stock_master(self, *, asof_date: dt.date | None = None) -> pd.DataFrame:
         master = object.__getattribute__(self, "_master_provider")
@@ -85,6 +90,9 @@ class CompositeProvider(DataProvider):
         pykrx_provider = object.__getattribute__(self, "_pykrx_provider")
         lock = object.__getattribute__(self, "_pykrx_lock")
         pykrx_available = object.__getattribute__(self, "_pykrx_ohlcv_available")
+
+        if not self._is_pykrx_compatible_ticker(ticker):
+            return self._fallback_ohlcv(ticker=ticker, start_date=start_date, end_date=end_date, adjusted=adjusted)
 
         if pykrx_available is False:
             return self._fallback_ohlcv(ticker=ticker, start_date=start_date, end_date=end_date, adjusted=adjusted)
@@ -142,6 +150,9 @@ class CompositeProvider(DataProvider):
         pykrx_provider = object.__getattribute__(self, "_pykrx_provider")
         lock = object.__getattribute__(self, "_pykrx_lock")
         pykrx_available = object.__getattribute__(self, "_pykrx_market_cap_available")
+
+        if not self._is_pykrx_compatible_ticker(ticker):
+            return self._fallback_market_cap()
 
         if pykrx_available is False:
             return self._fallback_market_cap()

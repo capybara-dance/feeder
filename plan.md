@@ -250,6 +250,7 @@
 - `pykrx` import 실패를 캐시해서 같은 실행 안에서 로그인 재시도를 반복하지 않도록 했다.
 - `CompositeProvider`가 pykrx OHLCV 실패를 런타임에 캐시해서, 같은 실행 안에서 반복 로그인/재시도를 하지 않도록 했다.
 - `FdrProvider`의 KRX -> NAVER 자동 전환을 제거해 과도한 fallback을 줄였다.
+- 알파벳 포함 티커는 제거하지 않고, pykrx는 6자리 숫자 티커에만 사용하도록 라우팅을 정리했다.
 
 ## 18) 세션 핸드오프
 
@@ -261,6 +262,7 @@
 - `pykrx` import 실패 캐시를 추가해 반복 로그인 시도를 막았다.
 - `CompositeProvider`에 pykrx 실패 캐시를 넣어 수집 루프에서 같은 실패를 반복하지 않도록 했다.
 - `FdrProvider`에서 KRX 실패 시 NAVER로 자동 전환하지 않도록 바꿨다.
+- 알파벳 포함 티커를 수집 대상에서 제외하지 않도록 복구했다.
 
 ### In progress
 - 없음.

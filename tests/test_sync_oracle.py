@@ -138,3 +138,43 @@ def test_fdr_provider_does_not_fallback_to_naver_on_krx_failure(monkeypatch):
         assert str(exc) == "krx denied"
 
     assert calls == ["KRX:005930"]
+
+
+def test_composite_provider_routes_alpha_tickers_away_from_pykrx(monkeypatch):
+    monkeypatch.setitem(sys.modules, "yfinance", types.ModuleType("yfinance"))
+
+    composite_module = importlib.import_module("capybara_fetcher.providers.composite_provider")
+    provider = composite_module.CompositeProvider()
+
+    class FailingPykrx:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def fetch_ohlcv(self, **kwargs):
+            self.calls += 1
+            raise RuntimeError("should not be called for alpha tickers")
+
+        def fetch_market_cap(self, **kwargs):
+            self.calls += 1
+            raise RuntimeError("should not be called for alpha tickers")
+
+    class TrackingFdr:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def fetch_ohlcv(self, **kwargs):
+            self.calls += 1
+            return pd.DataFrame({"시가": [1]})
+
+    failing_pykrx = FailingPykrx()
+    tracking_fdr = TrackingFdr()
+    object.__setattr__(provider, "_pykrx_provider", failing_pykrx)
+    object.__setattr__(provider, "_fdr_provider", tracking_fdr)
+
+    frame = provider.fetch_ohlcv(ticker="0004G0", start_date="2026-06-01", end_date="2026-06-02")
+    cap = provider.fetch_market_cap(ticker="0004G0", start_date="2026-06-01", end_date="2026-06-02")
+
+    assert not frame.empty
+    assert cap.empty
+    assert failing_pykrx.calls == 0
+    assert tracking_fdr.calls == 1

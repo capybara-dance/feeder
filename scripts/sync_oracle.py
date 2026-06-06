@@ -24,6 +24,7 @@ from capybara_fetcher.notifications import TelegramSender
 from capybara_fetcher.pipeline import CollectionConfig, collect_data
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logging.raiseExceptions = False
 logger = logging.getLogger(__name__)
 
 
