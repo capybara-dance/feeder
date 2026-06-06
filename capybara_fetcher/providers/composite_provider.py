@@ -10,6 +10,7 @@ from .fdr_provider import FdrProvider
 from .korea_investment_provider import KoreaInvestmentProvider
 from .master_json_provider import MasterJsonProvider
 from .pykrx_provider import PykrxProvider
+from .yfinance_provider import YFinanceProvider
 
 
 @dataclass(frozen=True)
@@ -22,12 +23,14 @@ class CompositeProvider(DataProvider):
     _fdr_provider: FdrProvider = field(default=None, init=False, repr=False, compare=False)
     _pykrx_provider: PykrxProvider = field(default=None, init=False, repr=False, compare=False)
     _korea_investment_provider: KoreaInvestmentProvider = field(default=None, init=False, repr=False, compare=False)
+    _yfinance_provider: YFinanceProvider = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_master_provider", MasterJsonProvider(master_json_path=self.master_json_path))
         object.__setattr__(self, "_fdr_provider", FdrProvider(source="KRX"))
         object.__setattr__(self, "_pykrx_provider", PykrxProvider())
         object.__setattr__(self, "_korea_investment_provider", KoreaInvestmentProvider())
+        object.__setattr__(self, "_yfinance_provider", YFinanceProvider())
 
     def load_stock_master(self, *, asof_date: dt.date | None = None) -> pd.DataFrame:
         master = object.__getattribute__(self, "_master_provider")
@@ -106,3 +109,20 @@ class CompositeProvider(DataProvider):
             return kis_provider.fetch_market_cap_snapshot(ticker)
         except Exception:
             return None
+
+    def fetch_dividends(
+        self,
+        *,
+        ticker: str,
+        start_date: str,
+        end_date: str,
+    ) -> pd.DataFrame:
+        yfinance_provider = object.__getattribute__(self, "_yfinance_provider")
+        try:
+            return yfinance_provider.fetch_dividends(
+                ticker=ticker,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        except Exception:
+            return pd.DataFrame(columns=["Date", "Dividend"])

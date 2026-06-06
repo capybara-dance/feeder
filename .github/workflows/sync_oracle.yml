@@ -1,0 +1,115 @@
+name: Sync Oracle Data
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_mode:
+        description: Run mode (daily/full-10y/range)
+        required: false
+        default: daily
+        type: string
+      lookback_days:
+        description: Daily mode lookback window for missing business days
+        required: false
+        default: "10"
+        type: string
+      start_date:
+        description: Range mode start date (YYYY-MM-DD)
+        required: false
+        default: ""
+        type: string
+      end_date:
+        description: Range mode end date (YYYY-MM-DD)
+        required: false
+        default: ""
+        type: string
+      test_limit:
+        description: Optional ticker limit (0 = all)
+        required: false
+        default: "0"
+        type: string
+      max_workers:
+        description: Parallel workers
+        required: false
+        default: "1"
+        type: string
+      batch_size:
+        description: Oracle executemany batch size
+        required: false
+        default: "2000"
+        type: string
+      market:
+        description: Optional market filter (KOSPI/KOSDAQ/ETF)
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: Collect only, skip DB upsert
+        required: false
+        default: false
+        type: boolean
+
+  # 21:00 KST == 12:00 UTC
+  schedule:
+    - cron: "0 12 * * *"
+
+jobs:
+  sync-oracle:
+    runs-on: ubuntu-latest
+    env:
+      OCI_DB_USER: ${{ secrets.OCI_DB_USER }}
+      OCI_DB_PW: ${{ secrets.OCI_DB_PW }}
+      OCI_DB_DSN: ${{ secrets.OCI_DB_DSN }}
+      OCI_WALLET: ${{ secrets.OCI_WALLET }}
+      OCI_WALLET_PW: ${{ secrets.OCI_WALLET_PW }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID_TEST: ${{ secrets.TELEGRAM_CHAT_ID_TEST }}
+      TELEGRAM_CHAT_ID_STOCK: ${{ secrets.TELEGRAM_CHAT_ID_STOCK }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build run arguments
+        id: args
+        shell: bash
+        run: |
+          ARGS="--mode daily --lookback-days 10 --test-limit 0 --max-workers 1 --batch-size 2000"
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            if [[ -n "${{ inputs.run_mode }}" ]]; then ARGS+=" --mode ${{ inputs.run_mode }}"; fi
+            if [[ -n "${{ inputs.lookback_days }}" ]]; then ARGS+=" --lookback-days ${{ inputs.lookback_days }}"; fi
+            if [[ -n "${{ inputs.start_date }}" ]]; then ARGS+=" --start-date ${{ inputs.start_date }}"; fi
+            if [[ -n "${{ inputs.end_date }}" ]]; then ARGS+=" --end-date ${{ inputs.end_date }}"; fi
+            if [[ -n "${{ inputs.test_limit }}" ]]; then ARGS+=" --test-limit ${{ inputs.test_limit }}"; fi
+            if [[ -n "${{ inputs.max_workers }}" ]]; then ARGS+=" --max-workers ${{ inputs.max_workers }}"; fi
+            if [[ -n "${{ inputs.batch_size }}" ]]; then ARGS+=" --batch-size ${{ inputs.batch_size }}"; fi
+            if [[ -n "${{ inputs.market }}" ]]; then ARGS+=" --market ${{ inputs.market }}"; fi
+            if [[ "${{ inputs.dry_run }}" == "true" ]]; then ARGS+=" --dry-run"; fi
+          fi
+
+          echo "args=${ARGS}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run sync_oracle
+        shell: bash
+        run: |
+          python scripts/sync_oracle.py ${{ steps.args.outputs.args }}
+
+      - name: Upload sync report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-oracle-report-${{ github.run_id }}
+          path: reports/sync_oracle_report.html
+          if-no-files-found: warn
+          retention-days: 14

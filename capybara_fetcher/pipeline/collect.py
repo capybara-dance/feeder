@@ -31,6 +31,7 @@ class CollectionResult:
     industry_df: pd.DataFrame
     master_df: pd.DataFrame
     price_df: pd.DataFrame
+    dividend_df: pd.DataFrame
     quality_metrics: dict[str, Any]
 
 
@@ -146,6 +147,48 @@ def _build_price_df(std_df: pd.DataFrame, *, master_raw: pd.DataFrame) -> tuple[
     return out, metrics
 
 
+def _build_dividend_df(std_df: pd.DataFrame) -> pd.DataFrame:
+    if std_df is None or std_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "TICKER",
+                "EX_DIVIDEND_DATE",
+                "DIVIDEND_PER_SHARE",
+                "RECORD_DATE",
+                "PAYMENT_DATE",
+                "DIVIDEND_TYPE",
+            ]
+        )
+
+    out = std_df.rename(
+        columns={
+            "Date": "EX_DIVIDEND_DATE",
+            "Ticker": "TICKER",
+            "Dividend": "DIVIDEND_PER_SHARE",
+        }
+    ).copy()
+    out["TICKER"] = out["TICKER"].astype(str).str.zfill(6)
+    out["EX_DIVIDEND_DATE"] = pd.to_datetime(out["EX_DIVIDEND_DATE"], errors="coerce").dt.normalize()
+    out["DIVIDEND_PER_SHARE"] = pd.to_numeric(out["DIVIDEND_PER_SHARE"], errors="coerce")
+    out["RECORD_DATE"] = pd.NaT
+    out["PAYMENT_DATE"] = pd.NaT
+    out["DIVIDEND_TYPE"] = "R"
+    out = out[
+        [
+            "TICKER",
+            "EX_DIVIDEND_DATE",
+            "DIVIDEND_PER_SHARE",
+            "RECORD_DATE",
+            "PAYMENT_DATE",
+            "DIVIDEND_TYPE",
+        ]
+    ]
+    out = out.dropna(subset=["TICKER", "EX_DIVIDEND_DATE", "DIVIDEND_PER_SHARE"])
+    out = out.drop_duplicates(subset=["TICKER", "EX_DIVIDEND_DATE"], keep="first")
+    out = out.sort_values(["TICKER", "EX_DIVIDEND_DATE"]).reset_index(drop=True)
+    return out
+
+
 def collect_data(cfg: CollectionConfig) -> CollectionResult:
     provider = CompositeProvider(master_json_path=cfg.master_json_path)
 
@@ -159,7 +202,7 @@ def collect_data(cfg: CollectionConfig) -> CollectionResult:
     if not tickers:
         raise ValueError("no tickers available for collection")
 
-    def fetch_one(ticker: str) -> pd.DataFrame:
+    def fetch_one(ticker: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         raw = provider.fetch_ohlcv(
             ticker=ticker,
             start_date=cfg.start_date,
@@ -185,21 +228,42 @@ def collect_data(cfg: CollectionConfig) -> CollectionResult:
             snapshot = provider.fetch_market_cap_snapshot(ticker=ticker)
             if snapshot is not None and snapshot > 0:
                 std["MarketCap"] = std["MarketCap"].fillna(snapshot)
-        return std
+        div_raw = provider.fetch_dividends(
+            ticker=ticker,
+            start_date=cfg.start_date,
+            end_date=cfg.end_date,
+        )
+        div_std = div_raw.copy()
+        if not div_std.empty:
+            if "Date" in div_std.columns:
+                div_std["Date"] = pd.to_datetime(div_std["Date"], errors="coerce").dt.normalize()
+            if "Dividend" in div_std.columns:
+                div_std["Dividend"] = pd.to_numeric(div_std["Dividend"], errors="coerce")
+            div_std["Ticker"] = str(ticker).zfill(6)
+            div_std = div_std[["Date", "Ticker", "Dividend"]].dropna(subset=["Date", "Ticker", "Dividend"])
+        else:
+            div_std = pd.DataFrame(columns=["Date", "Ticker", "Dividend"])
+
+        return std, div_std
 
     frames: list[pd.DataFrame] = []
+    dividend_frames: list[pd.DataFrame] = []
     if cfg.max_workers <= 1:
         for t in tickers:
-            one = fetch_one(t)
-            if not one.empty:
-                frames.append(one)
+            price_one, div_one = fetch_one(t)
+            if not price_one.empty:
+                frames.append(price_one)
+            if not div_one.empty:
+                dividend_frames.append(div_one)
     else:
         with ThreadPoolExecutor(max_workers=cfg.max_workers) as ex:
             fut_map = {ex.submit(fetch_one, t): t for t in tickers}
             for fut in as_completed(fut_map):
-                one = fut.result()
-                if not one.empty:
-                    frames.append(one)
+                price_one, div_one = fut.result()
+                if not price_one.empty:
+                    frames.append(price_one)
+                if not div_one.empty:
+                    dividend_frames.append(div_one)
 
     price_std = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(
         columns=["Date", "Ticker", "Open", "High", "Low", "Close", "Volume", "MarketCap"]
@@ -208,15 +272,22 @@ def collect_data(cfg: CollectionConfig) -> CollectionResult:
     industry_df = _build_industry_df(master_raw)
     master_df = _build_master_df(master_raw)
     price_df, quality_metrics = _build_price_df(price_std, master_raw=master_raw)
+    dividend_std = pd.concat(dividend_frames, ignore_index=True) if dividend_frames else pd.DataFrame(
+        columns=["Date", "Ticker", "Dividend"]
+    )
+    dividend_df = _build_dividend_df(dividend_std)
+    quality_metrics["dividend_row_count"] = int(len(dividend_df))
 
     logger.info("Collected industry_df rows=%s cols=%s", len(industry_df), list(industry_df.columns))
     logger.info("Collected master_df rows=%s cols=%s", len(master_df), list(master_df.columns))
     logger.info("Collected price_df rows=%s cols=%s", len(price_df), list(price_df.columns))
+    logger.info("Collected dividend_df rows=%s cols=%s", len(dividend_df), list(dividend_df.columns))
     logger.info("Quality metrics: %s", quality_metrics)
 
     return CollectionResult(
         industry_df=industry_df,
         master_df=master_df,
         price_df=price_df,
+        dividend_df=dividend_df,
         quality_metrics=quality_metrics,
     )

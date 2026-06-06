@@ -233,6 +233,16 @@
 - 데이터 항목 타입/수집 소스/구현 상태를 정리한 문서 `docs/data_dictionary.md`를 추가했다.
 - `scripts/update_data_dictionary_samples.py`를 추가해 최근 수집 결과로 `docs/data_dictionary.md` 샘플 블록을 자동 갱신하도록 구성했다.
 - KIS 시총 fallback을 원본 `시가총액` 필드 대신 `기준가 × 상장주수 × 1000` 재계산값으로 사용하도록 바꿨다.
+- `capybara_fetcher/providers/yfinance_provider.py`를 추가하고 `CompositeProvider`에 연결해 배당 조회 경로를 구현했다.
+- `collect_data` 결과에 `dividend_df`를 추가해 배당 데이터(`STOCK_DIVIDEND` 대상 컬럼 매핑)를 수집하도록 확장했다.
+- `capybara_fetcher/db/` 모듈(`oracle_client.py`, `sql_templates.py`, `repository.py`)을 추가해 현재 구현 완료 데이터(`STOCK_INDUSTRY`, `STOCK_MASTER`, `DAILY_PRICE`, `STOCK_DIVIDEND`)를 OracleDB에 MERGE upsert할 수 있도록 구현했다.
+- `scripts/sync_oracle.py`를 collection-only에서 실제 upsert 실행기로 확장하고, `--dry-run`, `--batch-size` 옵션을 추가했다.
+- `scripts/run_collection_report.py`를 DB 샘플 리포트용으로 확장해 `STOCK_INDUSTRY`, `STOCK_MASTER`, `DAILY_PRICE`, `STOCK_DIVIDEND`, `ETF_COMPONENT`의 row count/샘플 데이터를 HTML로 생성하고 텔레그램 전송하도록 반영했다.
+- `.github/workflows/run_collection_report.yml`에 `OCI_DB_USER`, `OCI_DB_DSN` 시크릿 매핑을 추가해 GitHub Actions에서도 DB 샘플 리포트를 생성/전송할 수 있도록 반영했다.
+- `scripts/sync_oracle.py`에 실행 모드(`daily`, `full-10y`, `range`)를 추가했다. `daily` 모드는 기본적으로 당일 데이터를 적재하며, DB 조회 기준 `오늘-10일` 영업일 누락 데이터가 있으면 해당 날짜도 함께 재수집/업데이트하도록 반영했다.
+- `.github/workflows/sync_oracle.yml`을 추가해 매일 21:00 KST 자동 실행 + 수동 트리거를 지원하도록 구성했다.
+- `.github/workflows/sync_oracle.yml`에 `actions/upload-artifact@v4` 단계를 추가해 `reports/sync_oracle_report.html`을 실행 결과 artifact로 보관하도록 반영했다(실패 시에도 `if: always()`로 업로드 시도).
+- `scripts/sync_oracle.py`의 HTML 리포트 본문(제목/섹션/지표 라벨/상태)을 한국어로 변경했다.
 
 ## 17) MARKET_CAP 0 문제 해결 방안
 
@@ -270,3 +280,31 @@
 - 샘플 실행(test-limit 50)에서 `MARKET_CAP=0` 비율이 기존 대비 유의미하게 감소한다.
 - 시총이 채워진 상위 종목(KOSPI/KOSDAQ/ETF) 샘플 10건을 리포트에 표시한다.
 - 리포트/로그에 `market_cap_missing_before`, `market_cap_missing_after`, `market_cap_zero_final` 지표를 출력한다.
+
+## 19) 예외 삼킴 개선 및 관측성 강화 계획
+
+### 배경
+- 현재 `CompositeProvider` 등 일부 경로에서 `except Exception: pass` 패턴이 존재해, 소스 장애 원인 추적이 어렵다.
+- 배치 실행 시 특정 티커에서 오류가 발생해도 원인/건수/영향 범위를 구조적으로 파악하기 어렵다.
+
+### 목표
+- 예외를 무시하지 않고 최소한 구조화 로그로 남긴다.
+- 티커 단위 실패를 격리해 전체 수집은 지속하되, 실패 통계와 원인을 리포트 가능하게 만든다.
+
+### 단계별 조치
+1. 예외 처리 규칙 정비
+  - `except Exception: pass`를 제거하고 `logger.warning` 또는 `logger.exception`으로 대체한다.
+  - 로그 필드에 `provider`, `ticker`, `stage`, `error_type`, `message`를 포함한다.
+2. 실패 격리
+  - 병렬/직렬 수집 모두에서 티커 단위 try-catch를 적용한다.
+  - 실패 티커는 스킵하고 나머지 티커 수집은 계속 수행한다.
+3. 메트릭 집계
+  - 소스별 성공/실패 카운트(`pykrx`, `fdr`, `korea_investment`, `yfinance`)를 `quality_metrics`에 추가한다.
+  - 실패 Top-N 티커와 stage별 오류 건수를 실행 요약에 포함한다.
+4. 리포트 노출
+  - `run_collection_report.py` HTML에 실패 요약 카드(총 실패건, 소스별 실패율, 상위 오류 유형)를 추가한다.
+
+### 검증 기준
+- 장애 유도 테스트(의도적 잘못된 티커/네트워크 실패)에서 전체 잡이 중단되지 않고 완료된다.
+- 로그에서 최소 1건 이상의 실패가 구조화 필드와 함께 확인된다.
+- 리포트에 소스별 성공/실패 지표가 노출된다.
