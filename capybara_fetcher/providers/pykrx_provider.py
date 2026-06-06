@@ -34,6 +34,17 @@ class PykrxProvider:
         end = end_date.replace("-", "")
         return stock.get_market_cap_by_date(start, end, ticker)
 
+    def fetch_index_fundamental(
+        self,
+        *,
+        start_date: str,
+        end_date: str,
+        index_code: str,
+    ) -> pd.DataFrame:
+        start = start_date.replace("-", "")
+        end = end_date.replace("-", "")
+        return stock.get_index_fundamental(start, end, index_code)
+
     def load_stock_master(self, *, asof_date: dt.date | None = None) -> pd.DataFrame:
         _ = asof_date
         raise NotImplementedError("PykrxProvider does not provide stock master")

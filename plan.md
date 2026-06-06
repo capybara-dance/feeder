@@ -260,6 +260,38 @@
 5. 대체 API 도입(후속)
   - `korea_investment` API를 시총 조회 대체 소스로 검증한다.
 
+## 19) 지수 기초 지표(배당수익률) 수집 구현
+
+### 구현 내용
+- `pykrx.stock.get_index_fundamental(start, end, index_code)` 를 사용해 지수 기초 지표(PER/PBR/배당수익률)를 수집하는 기능 추가.
+- 수집 결과를 텔레그램으로 전송하는 스크립트 추가.
+
+### 변경 파일
+- `capybara_fetcher/providers/pykrx_provider.py`: `fetch_index_fundamental` 메서드 추가
+- `capybara_fetcher/providers/composite_provider.py`: `fetch_index_fundamental` 노출
+- `scripts/collect_index_fundamental.py`: 신규 CLI 스크립트 (수집 + 텔레그램 전송)
+
+### 실행 방법
+```bash
+# 기본 실행 (최근 30일, KOSPI + KOSDAQ, 텔레그램 전송)
+python scripts/collect_index_fundamental.py
+
+# 기간 지정
+python scripts/collect_index_fundamental.py --start-date 20240101 --end-date 20240131
+
+# 지수 코드 지정 (1001=KOSPI, 2001=KOSDAQ, 1028=KOSPI200)
+python scripts/collect_index_fundamental.py --index-codes 1001,2001,1028
+
+# 일별 상세 데이터도 함께 전송
+python scripts/collect_index_fundamental.py --detail
+
+# 전송 없이 결과만 콘솔 출력
+python scripts/collect_index_fundamental.py --no-send
+```
+
+### 반환 데이터 컬럼 (pykrx 기준)
+- 종목수, 기준시가총액, 시가총액, PER, PBR, 배당수익률
+
 ## 18) TODO
 - pykrx 인증용 환경 변수(`KRX_ID`, `KRX_PW`)를 `.env` 또는 실행 환경에 설정하고, `005930`, `069500` 기준으로 pykrx 시총 조회 정상 동작을 재검증한다.
   - `CompositeProvider` 내부에서 `pykrx -> korea_investment` 순으로 시총 조회 fallback 체인을 구성한다.

@@ -106,3 +106,17 @@ class CompositeProvider(DataProvider):
             return kis_provider.fetch_market_cap_snapshot(ticker)
         except Exception:
             return None
+
+    def fetch_index_fundamental(
+        self,
+        *,
+        start_date: str,
+        end_date: str,
+        index_code: str,
+    ) -> pd.DataFrame:
+        pykrx_provider = object.__getattribute__(self, "_pykrx_provider")
+        return pykrx_provider.fetch_index_fundamental(
+            start_date=start_date,
+            end_date=end_date,
+            index_code=index_code,
+        )
