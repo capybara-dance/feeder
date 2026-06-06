@@ -28,6 +28,7 @@ def _build_html_report(result, cfg: CollectionConfig, started_at: dt.datetime, e
     industry_rows = len(result.industry_df)
     master_rows = len(result.master_df)
     price_rows = len(result.price_df)
+    dividend_rows = len(result.dividend_df)
 
     market_counts = (
         result.master_df["MARKET_CODE"].value_counts(dropna=False).rename_axis("MARKET_CODE").reset_index(name="COUNT")
@@ -97,6 +98,7 @@ def _build_html_report(result, cfg: CollectionConfig, started_at: dt.datetime, e
       <li>industry_df rows: <b>{industry_rows}</b></li>
       <li>master_df rows: <b>{master_rows}</b></li>
       <li>price_df rows: <b>{price_rows}</b></li>
+      <li>dividend_df rows: <b>{dividend_rows}</b></li>
     </ul>
   </div>
 
@@ -104,6 +106,11 @@ def _build_html_report(result, cfg: CollectionConfig, started_at: dt.datetime, e
     <h2>Market Cap Quality</h2>
     <ul>
       <li>market_cap_missing_before: <b>{missing_before}</b></li>
+
+  <div class="card">
+    <h2>dividend_df sample</h2>
+    {_fmt_table(result.dividend_df, max_rows=15)}
+  </div>
       <li>market_cap_missing_after_enrichment: <b>{missing_after}</b></li>
       <li>market_cap_zero_final: <b>{zero_final}</b> ({zero_ratio:.2f}%)</li>
     </ul>

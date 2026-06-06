@@ -109,6 +109,11 @@ sender.send_html_file("./report.html", caption="daily html report")
 - `market_cap_missing_after_enrichment`
 - `market_cap_zero_final`
 
+배당 수집:
+- 내부 `yfinance` provider를 통해 티커별 배당 내역을 조회해 `dividend_df`를 생성합니다.
+- Yahoo 심볼은 한국 종목 기준 `.KS` 우선, 필요 시 `.KQ` fallback으로 조회합니다.
+- 현재 저장 컬럼 매핑: `TICKER`, `EX_DIVIDEND_DATE`, `DIVIDEND_PER_SHARE`, `RECORD_DATE`, `PAYMENT_DATE`, `DIVIDEND_TYPE`.
+
 ## GitHub Actions 실행
 
 수집 리포트 실행 워크플로는 아래 파일에 추가되어 있습니다.

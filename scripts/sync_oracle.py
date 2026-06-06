@@ -51,6 +51,7 @@ def main() -> None:
     logger.info("industry_df: shape=%s", result.industry_df.shape)
     logger.info("master_df: shape=%s", result.master_df.shape)
     logger.info("price_df: shape=%s", result.price_df.shape)
+    logger.info("dividend_df: shape=%s", result.dividend_df.shape)
 
 
 if __name__ == "__main__":
