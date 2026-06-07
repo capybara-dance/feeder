@@ -57,6 +57,84 @@ class PykrxProvider:
         stock = _get_stock_module()
         return stock.get_market_cap_by_date(start, end, ticker)
 
+    def fetch_ohlcv_bulk(
+        self,
+        *,
+        start_date: str,
+        end_date: str,
+        adjusted: bool = True,
+    ) -> pd.DataFrame:
+        """Fetch OHLCV for all tickers (KOSPI + KOSDAQ) for each trading date in the range.
+
+        Returns a long-format DataFrame with columns: Date, Ticker, plus raw pykrx columns.
+        Much more efficient than per-ticker calls when collecting many tickers.
+        """
+        start = dt.date.fromisoformat(start_date[:10])
+        end = dt.date.fromisoformat(end_date[:10])
+        stock = _get_stock_module()
+
+        frames: list[pd.DataFrame] = []
+        cur = start
+        while cur <= end:
+            if cur.weekday() >= 5:  # skip weekends
+                cur += dt.timedelta(days=1)
+                continue
+            date_str = cur.strftime("%Y%m%d")
+            for market in ("KOSPI", "KOSDAQ"):
+                try:
+                    df = stock.get_market_ohlcv_by_ticker(date_str, market=market, adjusted=adjusted)
+                    if df is not None and not df.empty:
+                        df = df.copy()
+                        df.index.name = "Ticker"
+                        df = df.reset_index()
+                        df["Date"] = pd.Timestamp(cur)
+                        frames.append(df)
+                except Exception:
+                    pass
+            cur += dt.timedelta(days=1)
+
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
+    def fetch_market_cap_bulk(
+        self,
+        *,
+        start_date: str,
+        end_date: str,
+    ) -> pd.DataFrame:
+        """Fetch market cap for all tickers (KOSPI + KOSDAQ) for each trading date in the range.
+
+        Returns a long-format DataFrame with columns: Date, Ticker, plus raw pykrx columns.
+        """
+        start = dt.date.fromisoformat(start_date[:10])
+        end = dt.date.fromisoformat(end_date[:10])
+        stock = _get_stock_module()
+
+        frames: list[pd.DataFrame] = []
+        cur = start
+        while cur <= end:
+            if cur.weekday() >= 5:
+                cur += dt.timedelta(days=1)
+                continue
+            date_str = cur.strftime("%Y%m%d")
+            for market in ("KOSPI", "KOSDAQ"):
+                try:
+                    df = stock.get_market_cap_by_ticker(date_str, market=market)
+                    if df is not None and not df.empty:
+                        df = df.copy()
+                        df.index.name = "Ticker"
+                        df = df.reset_index()
+                        df["Date"] = pd.Timestamp(cur)
+                        frames.append(df)
+                except Exception:
+                    pass
+            cur += dt.timedelta(days=1)
+
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
     def load_stock_master(self, *, asof_date: dt.date | None = None) -> pd.DataFrame:
         _ = asof_date
         raise NotImplementedError("PykrxProvider does not provide stock master")

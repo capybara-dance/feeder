@@ -216,3 +216,69 @@ class CompositeProvider(DataProvider):
             )
         except Exception:
             return pd.DataFrame(columns=["Date", "Dividend"])
+
+    def fetch_ohlcv_bulk(
+        self,
+        *,
+        start_date: str,
+        end_date: str,
+        adjusted: bool = True,
+    ) -> pd.DataFrame:
+        """Bulk-fetch OHLCV for all tickers via pykrx date-level API.
+
+        Called once before concurrent per-ticker processing to eliminate
+        per-ticker pykrx HTTP calls and their thread-safety issues.
+        Returns an empty DataFrame if pykrx is unavailable.
+        """
+        pykrx_provider = object.__getattribute__(self, "_pykrx_provider")
+        lock = object.__getattribute__(self, "_pykrx_lock")
+        with lock:
+            try:
+                df = pykrx_provider.fetch_ohlcv_bulk(
+                    start_date=start_date,
+                    end_date=end_date,
+                    adjusted=adjusted,
+                )
+                if df is not None and not df.empty:
+                    object.__setattr__(self, "_pykrx_ohlcv_available", True)
+                    return df
+            except Exception as exc:
+                object.__setattr__(self, "_pykrx_ohlcv_available", False)
+                logger.warning("pykrx bulk OHLCV failed: %s", exc)
+        return pd.DataFrame()
+
+    def fetch_market_cap_bulk(
+        self,
+        *,
+        start_date: str,
+        end_date: str,
+    ) -> pd.DataFrame:
+        """Bulk-fetch market cap for all tickers via pykrx date-level API.
+
+        Returns an empty DataFrame if pykrx is unavailable.
+        """
+        pykrx_provider = object.__getattribute__(self, "_pykrx_provider")
+        lock = object.__getattribute__(self, "_pykrx_lock")
+        with lock:
+            try:
+                df = pykrx_provider.fetch_market_cap_bulk(
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+                if df is not None and not df.empty:
+                    object.__setattr__(self, "_pykrx_market_cap_available", True)
+                    return df
+            except Exception as exc:
+                object.__setattr__(self, "_pykrx_market_cap_available", False)
+                logger.warning("pykrx bulk market cap failed: %s", exc)
+        return pd.DataFrame()
+
+    def disable_pykrx_per_ticker(self) -> None:
+        """Prevent concurrent per-ticker pykrx calls after a successful bulk prefetch.
+
+        pykrx is not thread-safe; bulk data covers all standard KRX tickers so
+        per-ticker pykrx calls are no longer needed. Tickers absent from the bulk
+        result fall back to FDR.
+        """
+        object.__setattr__(self, "_pykrx_ohlcv_available", False)
+        object.__setattr__(self, "_pykrx_market_cap_available", False)

@@ -202,21 +202,63 @@ def collect_data(cfg: CollectionConfig) -> CollectionResult:
     if not tickers:
         raise ValueError("no tickers available for collection")
 
-    def fetch_one(ticker: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-        raw = provider.fetch_ohlcv(
-            ticker=ticker,
-            start_date=cfg.start_date,
-            end_date=cfg.end_date,
-            adjusted=cfg.adjusted,
-        )
-        std = standardize_ohlcv(raw, ticker=ticker)
+    # Bulk-fetch all pykrx data upfront (single-threaded) before spawning workers.
+    # pykrx is not thread-safe: concurrent per-ticker calls from multiple workers
+    # cause race conditions in its shared HTTP session.  One bulk call per date
+    # (covering all KRX tickers at once) is both faster and safe.
+    bulk_ohlcv_map: dict[str, pd.DataFrame] = {}
+    bulk_cap_map: dict[str, pd.DataFrame] = {}
 
-        cap_raw = provider.fetch_market_cap(
-            ticker=ticker,
-            start_date=cfg.start_date,
-            end_date=cfg.end_date,
-        )
-        cap_std = standardize_market_cap(cap_raw)
+    bulk_ohlcv = provider.fetch_ohlcv_bulk(
+        start_date=cfg.start_date,
+        end_date=cfg.end_date,
+        adjusted=cfg.adjusted,
+    )
+    if not bulk_ohlcv.empty and "Ticker" in bulk_ohlcv.columns:
+        bulk_ohlcv["Ticker"] = bulk_ohlcv["Ticker"].astype(str).str.zfill(6)
+        bulk_ohlcv_map = {t: grp.reset_index(drop=True) for t, grp in bulk_ohlcv.groupby("Ticker")}
+        logger.info("pykrx bulk OHLCV: %s rows, %s tickers", len(bulk_ohlcv), len(bulk_ohlcv_map))
+        # Disable per-ticker pykrx to prevent thread-safety issues in the fallback path.
+        provider.disable_pykrx_per_ticker()
+    else:
+        logger.info("pykrx bulk OHLCV unavailable; will use per-ticker fallback")
+
+    bulk_cap = provider.fetch_market_cap_bulk(
+        start_date=cfg.start_date,
+        end_date=cfg.end_date,
+    )
+    if not bulk_cap.empty and "Ticker" in bulk_cap.columns:
+        bulk_cap["Ticker"] = bulk_cap["Ticker"].astype(str).str.zfill(6)
+        bulk_cap_map = {t: grp.reset_index(drop=True) for t, grp in bulk_cap.groupby("Ticker")}
+        logger.info("pykrx bulk market cap: %s rows, %s tickers", len(bulk_cap), len(bulk_cap_map))
+
+    def fetch_one(ticker: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+        ticker_padded = str(ticker).zfill(6)
+
+        # OHLCV: use pre-fetched bulk data when available, otherwise fall back to
+        # per-ticker provider (which will use FDR since pykrx is disabled above).
+        if ticker_padded in bulk_ohlcv_map:
+            std = standardize_ohlcv(bulk_ohlcv_map[ticker_padded], ticker=ticker)
+        else:
+            raw = provider.fetch_ohlcv(
+                ticker=ticker,
+                start_date=cfg.start_date,
+                end_date=cfg.end_date,
+                adjusted=cfg.adjusted,
+            )
+            std = standardize_ohlcv(raw, ticker=ticker)
+
+        # Market cap: use pre-fetched bulk data when available.
+        if ticker_padded in bulk_cap_map:
+            cap_std = standardize_market_cap(bulk_cap_map[ticker_padded])
+        else:
+            cap_raw = provider.fetch_market_cap(
+                ticker=ticker,
+                start_date=cfg.start_date,
+                end_date=cfg.end_date,
+            )
+            cap_std = standardize_market_cap(cap_raw)
+
         if not cap_std.empty:
             std = std.merge(cap_std, on="Date", how="left", suffixes=("", "_from_cap"))
             if "MarketCap_from_cap" in std.columns:
