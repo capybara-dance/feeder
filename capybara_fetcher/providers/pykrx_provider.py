@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import datetime as dt
 import importlib
+import logging
 from dataclasses import dataclass
 
 import pandas as pd
+
+
+logger = logging.getLogger(__name__)
 
 
 _PYKRX_STOCK_MODULE = None
@@ -89,8 +93,8 @@ class PykrxProvider:
                         df = df.reset_index()
                         df["Date"] = pd.Timestamp(cur)
                         frames.append(df)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("pykrx OHLCV bulk skipped %s/%s: %s", date_str, market, exc)
             cur += dt.timedelta(days=1)
 
         if not frames:
@@ -127,8 +131,8 @@ class PykrxProvider:
                         df = df.reset_index()
                         df["Date"] = pd.Timestamp(cur)
                         frames.append(df)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("pykrx market cap bulk skipped %s/%s: %s", date_str, market, exc)
             cur += dt.timedelta(days=1)
 
         if not frames:
