@@ -232,6 +232,7 @@
 - 최근 테스트(`test-limit=10`) 기준 리포트 지표에서 `market_cap_zero_final`이 0(0.00%)으로 개선됨.
 - 데이터 항목 타입/수집 소스/구현 상태를 정리한 문서 `docs/data_dictionary.md`를 추가했다.
 - `scripts/update_data_dictionary_samples.py`를 추가해 최근 수집 결과로 `docs/data_dictionary.md` 샘플 블록을 자동 갱신하도록 구성했다.
+- `docs/data_dictionary.md`를 OracleDB 기준 데이터 계약 문서로 보강했다(Oracle 사용 명시, 키/제약/NULL 규칙, 값 매핑 규칙, 시간/단위/정밀도 규칙, 실행/검증 예제 추가).
 - KIS 시총 fallback을 원본 `시가총액` 필드 대신 `기준가 × 상장주수 × 1000` 재계산값으로 사용하도록 바꿨다.
 - `capybara_fetcher/providers/yfinance_provider.py`를 추가하고 `CompositeProvider`에 연결해 배당 조회 경로를 구현했다.
 - `collect_data` 결과에 `dividend_df`를 추가해 배당 데이터(`STOCK_DIVIDEND` 대상 컬럼 매핑)를 수집하도록 확장했다.
@@ -243,6 +244,41 @@
 - `.github/workflows/sync_oracle.yml`을 추가해 매일 21:00 KST 자동 실행 + 수동 트리거를 지원하도록 구성했다.
 - `.github/workflows/sync_oracle.yml`에 `actions/upload-artifact@v4` 단계를 추가해 `reports/sync_oracle_report.html`을 실행 결과 artifact로 보관하도록 반영했다(실패 시에도 `if: always()`로 업로드 시도).
 - `scripts/sync_oracle.py`의 HTML 리포트 본문(제목/섹션/지표 라벨/상태)을 한국어로 변경했다.
+- `scripts/sync_oracle.py`가 repo 루트 `.env`를 `capybara_fetcher` import 전에 먼저 읽도록 변경해, `KRX_ID`/`KRX_PW` 같은 pykrx 관련 환경변수가 import 시점부터 반영되게 했다.
+- 조기 dotenv 로딩을 별도 경량 모듈 `scripts/dotenv_loader.py`로 분리하고, 회귀 테스트 `tests/test_sync_oracle.py`를 추가했다.
+- `capybara_fetcher/providers/pykrx_provider.py`를 지연 import로 바꿔 import-time KRX 로그인 실패가 스크립트 시작을 깨지 않게 했다. 실패 시 `CompositeProvider`가 FDR로 폴백한다.
+- `pykrx` import 실패를 캐시해서 같은 실행 안에서 로그인 재시도를 반복하지 않도록 했다.
+- `CompositeProvider`가 pykrx OHLCV 실패를 런타임에 캐시해서, 같은 실행 안에서 반복 로그인/재시도를 하지 않도록 했다.
+- `FdrProvider`의 KRX -> NAVER 자동 전환을 제거해 과도한 fallback을 줄였다.
+- 알파벳 포함 티커는 제거하지 않고, pykrx는 6자리 숫자 티커에만 사용하도록 라우팅을 정리했다.
+
+## 18) 세션 핸드오프
+
+### Completed
+- `scripts/sync_oracle.py`의 `.env` 로딩 순서를 import 이전으로 이동했다.
+- repo 루트 `.env`를 기준으로 읽도록 해서 실행 위치에 덜 의존하게 했다.
+- dotenv 로직을 `scripts/dotenv_loader.py`로 분리하고 테스트를 추가했다.
+- `pykrx_provider.py`에서 `pykrx.stock`를 지연 import하도록 바꿔 import-time 로그인 실패를 방지했다.
+- `pykrx` import 실패 캐시를 추가해 반복 로그인 시도를 막았다.
+- `CompositeProvider`에 pykrx 실패 캐시를 넣어 수집 루프에서 같은 실패를 반복하지 않도록 했다.
+- `FdrProvider`에서 KRX 실패 시 NAVER로 자동 전환하지 않도록 바꿨다.
+- 알파벳 포함 티커를 수집 대상에서 제외하지 않도록 복구했다.
+
+### In progress
+- 없음.
+
+### Next 3 concrete tasks
+1. 필요하면 `pykrx` 로그인 실패 재현 경로를 별도 로그로 더 좁힌다.
+2. `KRX_ID`/`KRX_PW` 외에 추가로 필요한 pykrx 관련 환경변수가 있는지 확인한다.
+3. Oracle 적재 워크플로의 실제 운영 로그를 한 번 더 점검한다.
+
+### Risks / blockers
+- 현재 환경에는 `oracledb`가 없어 전체 스크립트 end-to-end import 실행은 여기서 직접 검증하지 못했다.
+- `pykrx`가 `.env` 외에 추가 인증 상태를 요구하면 별도 조치가 필요할 수 있다.
+
+### Commands used for verification
+- `python -m py_compile capybara_fetcher/providers/pykrx_provider.py scripts/dotenv_loader.py scripts/sync_oracle.py`
+- `python -m pytest -q tests/test_sync_oracle.py`
 
 ## 17) MARKET_CAP 0 문제 해결 방안
 
