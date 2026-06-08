@@ -251,6 +251,9 @@
 - `CompositeProvider`가 pykrx OHLCV 실패를 런타임에 캐시해서, 같은 실행 안에서 반복 로그인/재시도를 하지 않도록 했다.
 - `FdrProvider`의 KRX -> NAVER 자동 전환을 제거해 과도한 fallback을 줄였다.
 - 알파벳 포함 티커는 제거하지 않고, pykrx는 6자리 숫자 티커에만 사용하도록 라우팅을 정리했다.
+- `scripts/sync_oracle.py`에 `--skip-dividends` 옵션을 추가해 배당 수집 단계를 비활성화할 수 있게 했다.
+- `.github/workflows/sync_oracle.yml` 수동 입력에 `collect_dividends`(boolean)를 추가해 Action에서 배당 수집 on/off를 제어할 수 있게 했다.
+- `scripts/sync_oracle.py`와 `.github/workflows/sync_oracle.yml`의 기본 `max_workers` 값을 1에서 8로 변경했다.
 
 ## 18) 세션 핸드오프
 

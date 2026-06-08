@@ -107,6 +107,7 @@ def _build_html_report(
     collection_stats: dict[str, object],
     upsert_stats: dict[str, int],
     db_stats: dict[str, object],
+    collect_dividends: bool,
     dry_run: bool,
     run_error: str | None,
 ) -> str:
@@ -145,6 +146,7 @@ def _build_html_report(
             수집 시작일=<code>{html.escape(resolved_start)}</code>,
             수집 종료일=<code>{html.escape(resolved_end)}</code>,
             대상 날짜 수=<code>{target_dates_count if target_dates_count is not None else '전체'}</code>,
+            배당 수집=<code>{collect_dividends}</code>,
             드라이런=<code>{dry_run}</code>,
             실행 상태=<code>{status}</code>
         </p>
@@ -297,7 +299,7 @@ def main() -> None:
     parser.add_argument("--start-date", type=str, default=None, help="Required when mode=range; format YYYYMMDD or YYYY-MM-DD")
     parser.add_argument("--end-date", type=str, default=None, help="Required when mode=range; format YYYYMMDD or YYYY-MM-DD")
     parser.add_argument("--test-limit", type=int, default=0)
-    parser.add_argument("--max-workers", type=int, default=1)
+    parser.add_argument("--max-workers", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=2000)
     parser.add_argument("--market", type=str, default=None, help="Optional market filter, e.g. KOSPI/KOSDAQ/ETF")
     parser.add_argument("--master-json-path", type=str, default=None, help="Optional stock master json path")
@@ -305,6 +307,7 @@ def main() -> None:
     parser.add_argument("--caption", type=str, default="sync oracle report")
     parser.add_argument("--no-send-report", action="store_true", help="Generate report only, do not send to Telegram")
     parser.add_argument("--dry-run", action="store_true", help="Collect only and print row counts without DB upsert")
+    parser.add_argument("--skip-dividends", action="store_true", help="Skip dividend collection stage")
     args = parser.parse_args()
 
     resolved_start, resolved_end, target_dates = _resolve_collection_window(
@@ -322,6 +325,7 @@ def main() -> None:
         test_limit=int(args.test_limit),
         max_workers=int(args.max_workers),
         adjusted=True,
+        collect_dividends=not bool(args.skip_dividends),
         market=args.market,
         master_json_path=args.master_json_path,
     )
@@ -415,6 +419,7 @@ def main() -> None:
         collection_stats=collection_stats,
         upsert_stats=upsert_stats,
         db_stats=db_stats,
+        collect_dividends=bool(cfg.collect_dividends),
         dry_run=bool(args.dry_run),
         run_error=run_error,
     )
