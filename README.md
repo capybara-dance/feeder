@@ -250,6 +250,11 @@ GitHub Release 기반 적재(초기 10년치 권장):
 	--no-send-report
 ```
 
+UNDO 관련 오류(`ORA-30036`) 대응:
+- 대량 upsert 시 트랜잭션이 길어지면 UNDO tablespace 부족이 발생할 수 있습니다.
+- `OCI_COMMIT_EVERY_BATCHES` 환경변수로 `executemany` 커밋 주기를 조절할 수 있습니다(기본값 `1`, 즉 배치마다 커밋).
+- release full-10y 전용 workflow에서는 `commit_every_batches` 입력값으로 동일 설정을 제어할 수 있습니다.
+
 배당 수집 비활성화(속도 최적화):
 
 ```bash

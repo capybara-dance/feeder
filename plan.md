@@ -442,3 +442,4 @@
 - `ORA-02291(FK_DAILY_PRICE_TICKER)` 대응으로 release price 배치에서 `STOCK_MASTER`에 없는 티커 행을 사전 제거하도록 보강했다.
 - upsert 진행 관측성을 위해 release 경로 배치 루프에 progress bar(`tqdm`) 및 주기적 로그를 추가했고, repository 청크 upsert에도 chunk 진행 로그를 추가했다.
 - 기존 `sync_oracle.yml`과 분리된 release full-10y 전용 워크플로 `.github/workflows/sync_oracle_release_full.yml`을 추가했다.
+- GitHub Actions에서 발생한 `ORA-30036(UNDO 부족)` 대응으로 `OracleClient.execute_many`에 주기적 커밋을 추가했고, `OCI_COMMIT_EVERY_BATCHES`(기본 1)로 커밋 주기를 조절 가능하게 했다.
