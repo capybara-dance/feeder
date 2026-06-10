@@ -22,6 +22,7 @@ class CollectionConfig:
     test_limit: int = 0
     max_workers: int = 4
     adjusted: bool = True
+    collect_dividends: bool = True
     market: str | None = None
     master_json_path: str | None = None
 
@@ -228,19 +229,22 @@ def collect_data(cfg: CollectionConfig) -> CollectionResult:
             snapshot = provider.fetch_market_cap_snapshot(ticker=ticker)
             if snapshot is not None and snapshot > 0:
                 std["MarketCap"] = std["MarketCap"].fillna(snapshot)
-        div_raw = provider.fetch_dividends(
-            ticker=ticker,
-            start_date=cfg.start_date,
-            end_date=cfg.end_date,
-        )
-        div_std = div_raw.copy()
-        if not div_std.empty:
-            if "Date" in div_std.columns:
-                div_std["Date"] = pd.to_datetime(div_std["Date"], errors="coerce").dt.normalize()
-            if "Dividend" in div_std.columns:
-                div_std["Dividend"] = pd.to_numeric(div_std["Dividend"], errors="coerce")
-            div_std["Ticker"] = str(ticker).zfill(6)
-            div_std = div_std[["Date", "Ticker", "Dividend"]].dropna(subset=["Date", "Ticker", "Dividend"])
+        if cfg.collect_dividends:
+            div_raw = provider.fetch_dividends(
+                ticker=ticker,
+                start_date=cfg.start_date,
+                end_date=cfg.end_date,
+            )
+            div_std = div_raw.copy()
+            if not div_std.empty:
+                if "Date" in div_std.columns:
+                    div_std["Date"] = pd.to_datetime(div_std["Date"], errors="coerce").dt.normalize()
+                if "Dividend" in div_std.columns:
+                    div_std["Dividend"] = pd.to_numeric(div_std["Dividend"], errors="coerce")
+                div_std["Ticker"] = str(ticker).zfill(6)
+                div_std = div_std[["Date", "Ticker", "Dividend"]].dropna(subset=["Date", "Ticker", "Dividend"])
+            else:
+                div_std = pd.DataFrame(columns=["Date", "Ticker", "Dividend"])
         else:
             div_std = pd.DataFrame(columns=["Date", "Ticker", "Dividend"])
 
@@ -282,6 +286,7 @@ def collect_data(cfg: CollectionConfig) -> CollectionResult:
     logger.info("Collected master_df rows=%s cols=%s", len(master_df), list(master_df.columns))
     logger.info("Collected price_df rows=%s cols=%s", len(price_df), list(price_df.columns))
     logger.info("Collected dividend_df rows=%s cols=%s", len(dividend_df), list(dividend_df.columns))
+    logger.info("Dividend collection enabled=%s", cfg.collect_dividends)
     logger.info("Quality metrics: %s", quality_metrics)
 
     return CollectionResult(

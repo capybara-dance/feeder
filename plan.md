@@ -251,6 +251,9 @@
 - `CompositeProvider`가 pykrx OHLCV 실패를 런타임에 캐시해서, 같은 실행 안에서 반복 로그인/재시도를 하지 않도록 했다.
 - `FdrProvider`의 KRX -> NAVER 자동 전환을 제거해 과도한 fallback을 줄였다.
 - 알파벳 포함 티커는 제거하지 않고, pykrx는 6자리 숫자 티커에만 사용하도록 라우팅을 정리했다.
+- `scripts/sync_oracle.py`에 `--skip-dividends` 옵션을 추가해 배당 수집 단계를 비활성화할 수 있게 했다.
+- `.github/workflows/sync_oracle.yml` 수동 입력에 `collect_dividends`(boolean)를 추가해 Action에서 배당 수집 on/off를 제어할 수 있게 했다.
+- `scripts/sync_oracle.py`와 `.github/workflows/sync_oracle.yml`의 기본 `max_workers` 값을 1에서 8로 변경했다.
 
 ## 18) 세션 핸드오프
 
@@ -344,3 +347,98 @@
 - 장애 유도 테스트(의도적 잘못된 티커/네트워크 실패)에서 전체 잡이 중단되지 않고 완료된다.
 - 로그에서 최소 1건 이상의 실패가 구조화 필드와 함께 확인된다.
 - 리포트에 소스별 성공/실패 지표가 노출된다.
+
+## 20) Oracle 조회 Streamlit 앱 추가 (2026-06-08)
+
+### 구현 내용
+- 루트에 `streamlit_app.py`를 추가했다.
+- Oracle DB(`STOCK_MASTER`)에서 티커/종목명 검색 기능을 구현했다.
+- 선택 티커 기준 최근 1년(`365일`) `DAILY_PRICE`를 조회해 캔들 차트로 표시한다.
+- 최근 가격 데이터 30행을 표로 함께 노출한다.
+- 앱 시작 시 repo 루트 `.env`를 로딩해 Oracle 접속 환경변수를 사용한다.
+
+### 문서/의존성 반영
+- `requirements.txt`에 `streamlit`, `plotly`를 추가했다.
+- `README.md`에 Streamlit 앱 실행 방법과 기능 설명을 추가했다.
+
+## 21) 세션 핸드오프 (2026-06-08)
+
+### Completed
+- `streamlit_app.py` 신규 추가 (Oracle 검색 + 1년 캔들 차트).
+- `requirements.txt`에 Streamlit 시각화 의존성 추가.
+- `README.md`에 실행/사용 방법 문서화.
+
+### In progress
+- 없음.
+
+### Next 3 concrete tasks
+1. Streamlit 앱에 기간 선택(3개월/6개월/1년) 옵션 추가.
+2. 거래량 보조 차트(서브플롯) 추가.
+3. 검색 결과 정렬 옵션(티커 우선/이름 우선) 및 페이지네이션 추가.
+
+### Risks / blockers
+- 현재 환경에서 실제 Oracle 접속 정보 미보유 시 앱 실행 검증은 제한된다.
+
+### Commands used for verification
+- `python -m py_compile streamlit_app.py`
+
+## 22) 릴리즈 기반 Oracle 적재 경로 추가 (2026-06-10)
+
+### 구현 내용
+- `capybara_fetcher/pipeline/release_ingest.py`를 추가해 GitHub Release API에서 자산 URL을 조회하고 Parquet를 읽어 DB upsert 입력 포맷으로 변환하도록 구현했다.
+- `scripts/sync_oracle.py`에 `--source release` 모드를 추가해 수집 소스를 `collect`/`release`로 선택할 수 있게 했다.
+- 릴리즈 모드에서는 `korea_universe_feature_frame.parquet`, `krx_stock_master.parquet`를 사용해 `industry/master/price` 프레임을 생성하고 Oracle upsert를 수행한다.
+- `source=release`에서는 아직 `mode=daily`를 지원하지 않도록 명시적으로 차단했다(향후 일일 upsert는 `source=collect + mode=daily` 경로로 확장 예정).
+- HTML 리포트에 소스 타입 및 릴리즈 메타(repo/tag/name/published_at)를 노출하도록 보강했다.
+
+### 문서/테스트 반영
+- `tests/test_release_ingest.py`를 추가해 릴리즈 자산 매핑/필수 자산 검증/날짜 필터 로직을 테스트했다.
+- `requirements.txt`에 Parquet 엔진 의존성 `pyarrow`를 추가했다.
+- `README.md`에 릴리즈 기반 초기 적재 실행 예시와 운영 전략(초기 release 적재 후 daily upsert 전환)을 문서화했다.
+
+## 23) 세션 핸드오프 (2026-06-10)
+
+### Completed
+- 릴리즈 기반 DB 업데이트 경로(`--source release`)를 구현했다.
+- 릴리즈 자산(피처/마스터)에서 Oracle upsert 입력 스키마로 변환하는 파이프라인을 추가했다.
+- 릴리즈 모드 실행 정보를 HTML 리포트에 노출했다.
+- 릴리즈 ingest 단위 테스트를 추가했다.
+- 문서와 의존성을 동기화했다(`README.md`, `requirements.txt`, `plan.md`).
+
+### In progress
+- 없음.
+
+### Next 3 concrete tasks
+1. `source=release`에 `daily` 동작 정의(최신 릴리즈 diff 기반/날짜 필터 기반 중 선택)와 구현.
+2. 릴리즈 메타/자산 checksum 저장 테이블(또는 로그) 추가로 중복 재처리 방지.
+3. GitHub Actions `sync_oracle.yml`에 릴리즈 모드 입력 옵션 추가.
+
+### Risks / blockers
+- 릴리즈 자산 스키마가 변경되면 파서가 실패할 수 있으므로 스키마 드리프트 감시가 필요하다.
+- `pd.read_parquet` 실행을 위해 환경에 `pyarrow`가 반드시 설치되어야 한다.
+
+### Commands used for verification
+- `/workspaces/feeder/.venv/bin/python -m pytest -q tests/test_release_ingest.py tests/test_sync_oracle.py`
+
+## 24) 릴리즈 full 적재 SIGTERM(143) 대응 (2026-06-10)
+
+### 구현 내용
+- `capybara_fetcher/db/repository.py`의 upsert 경로를 청크 처리로 변경했다.
+- 기존에는 `DAILY_PRICE` 전체 행을 한 번에 `list[dict]`로 물질화해 메모리 피크가 컸다.
+- 현재는 DataFrame을 lazy chunk(기본 50,000행)로 나눠 Oracle `executemany`를 반복 호출한다.
+- 동일 방식으로 `STOCK_MASTER`, `STOCK_INDUSTRY`, `STOCK_DIVIDEND`도 chunk upsert로 통일했다.
+
+### 효과
+- 대용량 release 적재 시 upsert 시작 직후 발생하던 메모리 급증을 완화한다.
+- `batch_size`는 DB roundtrip 단위, chunk는 Python 메모리 피크 단위를 제어한다.
+
+### Commands used for verification
+- `/workspaces/feeder/.venv/bin/python -m pytest -q tests/test_sync_oracle.py tests/test_release_ingest.py`
+
+### 추가 반영 (2026-06-10)
+- 릴리즈 적재가 수집 단계에서 SIGTERM(143)으로 종료되는 케이스를 줄이기 위해, 릴리즈 feature parquet 전체 로드 방식을 제거했다.
+- `scripts/sync_oracle.py`의 `source=release` 경로를 스트리밍 처리로 전환해, parquet row-batch 단위로 `DAILY_PRICE` upsert를 수행하도록 변경했다.
+- 임시 다운로드 파일 정리(cleanup) 로직을 추가했다.
+- `ORA-02291(FK_DAILY_PRICE_TICKER)` 대응으로 release price 배치에서 `STOCK_MASTER`에 없는 티커 행을 사전 제거하도록 보강했다.
+- upsert 진행 관측성을 위해 release 경로 배치 루프에 progress bar(`tqdm`) 및 주기적 로그를 추가했고, repository 청크 upsert에도 chunk 진행 로그를 추가했다.
+- 기존 `sync_oracle.yml`과 분리된 release full-10y 전용 워크플로 `.github/workflows/sync_oracle_release_full.yml`을 추가했다.

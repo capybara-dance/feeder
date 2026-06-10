@@ -31,7 +31,7 @@ on:
       max_workers:
         description: Parallel workers
         required: false
-        default: "1"
+        default: "8"
         type: string
       batch_size:
         description: Oracle executemany batch size
@@ -47,6 +47,11 @@ on:
         description: Collect only, skip DB upsert
         required: false
         default: false
+        type: boolean
+      collect_dividends:
+        description: Collect dividends (disable to speed up run)
+        required: false
+        default: true
         type: boolean
 
   # 21:00 KST == 12:00 UTC
@@ -84,7 +89,7 @@ jobs:
         id: args
         shell: bash
         run: |
-          ARGS="--mode daily --lookback-days 10 --test-limit 0 --max-workers 1 --batch-size 2000"
+          ARGS="--mode daily --lookback-days 10 --test-limit 0 --max-workers 8 --batch-size 2000"
 
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             if [[ -n "${{ inputs.run_mode }}" ]]; then ARGS+=" --mode ${{ inputs.run_mode }}"; fi
@@ -96,6 +101,7 @@ jobs:
             if [[ -n "${{ inputs.batch_size }}" ]]; then ARGS+=" --batch-size ${{ inputs.batch_size }}"; fi
             if [[ -n "${{ inputs.market }}" ]]; then ARGS+=" --market ${{ inputs.market }}"; fi
             if [[ "${{ inputs.dry_run }}" == "true" ]]; then ARGS+=" --dry-run"; fi
+            if [[ "${{ inputs.collect_dividends }}" == "false" ]]; then ARGS+=" --skip-dividends"; fi
           fi
 
           echo "args=${ARGS}" >> "${GITHUB_OUTPUT}"
