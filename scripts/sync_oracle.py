@@ -6,6 +6,7 @@ import html
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -22,10 +23,33 @@ load_dotenv_if_present(Path(REPO_ROOT) / ".env")
 from capybara_fetcher.db import OracleClient, OracleRepository
 from capybara_fetcher.notifications import TelegramSender
 from capybara_fetcher.pipeline import CollectionConfig, collect_data
+from capybara_fetcher.pipeline.release_ingest import (
+    estimate_release_batch_count,
+    iter_release_price_batches,
+    prepare_release_data,
+)
+
+try:
+    from tqdm import tqdm
+except Exception:
+    tqdm = None
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logging.raiseExceptions = False
 logger = logging.getLogger(__name__)
+
+
+def _iter_with_optional_progress(iterable, *, total: int | None, desc: str, use_tqdm: bool):
+    if use_tqdm and tqdm is not None:
+        yield from tqdm(iterable, total=total, desc=desc, unit="batch")
+        return
+    for i, item in enumerate(iterable, start=1):
+        if i == 1 or i % 5 == 0:
+            if total:
+                logger.info("%s progress: batch %s/%s", desc, i, total)
+            else:
+                logger.info("%s progress: batch %s", desc, i)
+        yield item
 
 
 def _to_iso_date(v: str) -> str:
@@ -96,6 +120,7 @@ def _db_total_stats() -> dict[str, object]:
 
 def _build_html_report(
     *,
+    source: str,
     mode: str,
     resolved_start: str,
     resolved_end: str,
@@ -110,6 +135,7 @@ def _build_html_report(
     collect_dividends: bool,
     dry_run: bool,
     run_error: str | None,
+    release_info: dict[str, str | None] | None,
 ) -> str:
     collect_sec = (collect_ended_at - collect_started_at).total_seconds()
     upsert_sec = (upsert_ended_at - upsert_started_at).total_seconds() if upsert_started_at and upsert_ended_at else 0.0
@@ -118,6 +144,14 @@ def _build_html_report(
     db_counts = db_stats.get("counts", {}) or {}
     db_min, db_max = db_stats.get("price_date_range", (None, None))
     status = "실패" if run_error else "성공"
+    release_line = ""
+    if release_info:
+        release_line = (
+            f"릴리즈 repo=<code>{html.escape(str(release_info.get('repo') or ''))}</code>, "
+            f"tag=<code>{html.escape(str(release_info.get('tag') or ''))}</code>, "
+            f"name=<code>{html.escape(str(release_info.get('name') or ''))}</code>, "
+            f"published_at=<code>{html.escape(str(release_info.get('published_at') or '-'))}</code>"
+        )
 
     return f"""<!doctype html>
 <html lang=\"ko\">
@@ -143,6 +177,7 @@ def _build_html_report(
         <h2>실행 설정</h2>
         <p>
             실행 모드=<code>{html.escape(mode)}</code>,
+            입력 소스=<code>{html.escape(source)}</code>,
             수집 시작일=<code>{html.escape(resolved_start)}</code>,
             수집 종료일=<code>{html.escape(resolved_end)}</code>,
             대상 날짜 수=<code>{target_dates_count if target_dates_count is not None else '전체'}</code>,
@@ -150,6 +185,7 @@ def _build_html_report(
             드라이런=<code>{dry_run}</code>,
             실행 상태=<code>{status}</code>
         </p>
+        <p>{release_line if release_line else '<i>release 메타 없음</i>'}</p>
         <p>수집 소요시간=<b>{collect_sec:.2f}초</b>, 업서트 소요시간=<b>{upsert_sec:.2f}초</b></p>
     </div>
 
@@ -294,6 +330,7 @@ def _filter_dates(result, target_dates: set[dt.date] | None):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Collect data and upsert into OracleDB")
+    parser.add_argument("--source", choices=["collect", "release"], default="collect", help="Data source mode")
     parser.add_argument("--mode", choices=["daily", "full-10y", "range"], default="daily")
     parser.add_argument("--lookback-days", type=int, default=10, help="In daily mode, check missing business dates in [today-lookback, today]")
     parser.add_argument("--start-date", type=str, default=None, help="Required when mode=range; format YYYYMMDD or YYYY-MM-DD")
@@ -308,6 +345,10 @@ def main() -> None:
     parser.add_argument("--no-send-report", action="store_true", help="Generate report only, do not send to Telegram")
     parser.add_argument("--dry-run", action="store_true", help="Collect only and print row counts without DB upsert")
     parser.add_argument("--skip-dividends", action="store_true", help="Skip dividend collection stage")
+    parser.add_argument("--release-repo", type=str, default="capybara-dance/capybara_fetcher", help="GitHub release repo owner/name")
+    parser.add_argument("--release-tag", type=str, default=None, help="Release tag (default: latest)")
+    parser.add_argument("--release-token", type=str, default=None, help="Optional GitHub token for release API/asset download")
+    parser.add_argument("--no-progress", action="store_true", help="Disable tqdm progress bar and use plain logs")
     args = parser.parse_args()
 
     resolved_start, resolved_end, target_dates = _resolve_collection_window(
@@ -317,7 +358,7 @@ def main() -> None:
         end_date=args.end_date,
     )
 
-    logger.info("Resolved collection window: start=%s end=%s mode=%s", resolved_start, resolved_end, args.mode)
+    logger.info("Resolved collection window: start=%s end=%s mode=%s source=%s", resolved_start, resolved_end, args.mode, args.source)
 
     cfg = CollectionConfig(
         start_date=_to_iso_date(resolved_start),
@@ -330,13 +371,49 @@ def main() -> None:
         master_json_path=args.master_json_path,
     )
 
-    logger.info("Starting collection with CompositeProvider only")
+    if args.source == "release" and args.mode == "daily":
+        raise ValueError("source=release does not support mode=daily yet; use mode=full-10y or mode=range")
+
+    release_info: dict[str, str | None] | None = None
+    release_prepared = None
+
+    logger.info("Starting collection")
     collect_started_at = dt.datetime.now(dt.timezone.utc)
     run_error: str | None = None
     result = None
     try:
-        result = collect_data(cfg)
-        result = _filter_dates(result, target_dates)
+        if args.source == "collect":
+            logger.info("Collection source=collect (CompositeProvider)")
+            result = collect_data(cfg)
+            result = _filter_dates(result, target_dates)
+        else:
+            logger.info("Collection source=release repo=%s tag=%s", args.release_repo, args.release_tag or "latest")
+            release_prepared = prepare_release_data(
+                repo=args.release_repo,
+                tag=args.release_tag,
+                token=(args.release_token or os.getenv("GITHUB_TOKEN")),
+            )
+            from capybara_fetcher.pipeline.collect import CollectionResult
+
+            result = CollectionResult(
+                industry_df=release_prepared.industry_df,
+                master_df=release_prepared.master_df,
+                price_df=release_prepared.master_df.iloc[0:0][[]].copy(),
+                dividend_df=release_prepared.master_df.iloc[0:0][[]].copy(),
+                quality_metrics={
+                    "market_cap_missing_before": 0,
+                    "market_cap_missing_after_enrichment": 0,
+                    "market_cap_zero_final": 0,
+                    "price_row_count": 0,
+                    "dividend_row_count": 0,
+                },
+            )
+            release_info = {
+                "repo": release_prepared.release.repo,
+                "tag": release_prepared.release.tag,
+                "name": release_prepared.release.name,
+                "published_at": release_prepared.release.published_at,
+            }
     except Exception as e:
         run_error = f"collection failed: {e}"
         logger.exception("Collection failed")
@@ -367,6 +444,49 @@ def main() -> None:
 
     if args.dry_run:
         logger.info("Dry-run enabled. Skip Oracle upsert.")
+        if args.source == "release" and release_prepared is not None:
+            use_tqdm = not bool(args.no_progress)
+            expected_batches = estimate_release_batch_count(release_prepared, batch_rows=200000)
+            started = time.monotonic()
+            total_rows = 0
+            quality = {
+                "market_cap_missing_before": 0,
+                "market_cap_missing_after_enrichment": 0,
+                "market_cap_zero_final": 0,
+                "price_row_count": 0,
+                "dropped_unknown_ticker_rows": 0,
+            }
+            batch_iter = iter_release_price_batches(
+                release_prepared,
+                start_date=_to_iso_date(resolved_start),
+                end_date=_to_iso_date(resolved_end),
+                batch_rows=200000,
+            )
+            for batch_idx, (batch_df, m) in enumerate(
+                _iter_with_optional_progress(
+                    batch_iter,
+                    total=expected_batches if expected_batches > 0 else None,
+                    desc="release-dryrun",
+                    use_tqdm=use_tqdm,
+                ),
+                start=1,
+            ):
+                total_rows += len(batch_df)
+                quality["market_cap_missing_before"] += int(m["market_cap_missing_before"])
+                quality["market_cap_missing_after_enrichment"] += int(m["market_cap_missing_after_enrichment"])
+                quality["market_cap_zero_final"] += int(m["market_cap_zero_final"])
+                quality["price_row_count"] += int(m["price_row_count"])
+                quality["dropped_unknown_ticker_rows"] += int(m.get("dropped_unknown_ticker_rows", 0))
+                if batch_idx == 1 or batch_idx % 5 == 0:
+                    elapsed = time.monotonic() - started
+                    logger.info(
+                        "release dry-run progress: batches=%s rows=%s elapsed=%.1fs",
+                        batch_idx,
+                        total_rows,
+                        elapsed,
+                    )
+            collection_stats["price_rows"] = int(total_rows)
+            collection_stats["quality_metrics"] = {**collection_stats.get("quality_metrics", {}), **quality}
     elif result is None:
         logger.warning("Skipping Oracle upsert because collection failed")
     else:
@@ -375,28 +495,84 @@ def main() -> None:
         try:
             with OracleClient.from_env(batch_size=int(args.batch_size)) as client:
                 repo = OracleRepository(client)
-                summary = repo.upsert_all(
-                    industry_df=result.industry_df,
-                    master_df=result.master_df,
-                    price_df=result.price_df,
-                    dividend_df=result.dividend_df,
-                )
+                if args.source == "release" and release_prepared is not None:
+                    use_tqdm = not bool(args.no_progress)
+                    expected_batches = estimate_release_batch_count(release_prepared, batch_rows=200000)
+                    upsert_stats["STOCK_INDUSTRY"] = int(repo.upsert_stock_industry(result.industry_df))
+                    upsert_stats["STOCK_MASTER"] = int(repo.upsert_stock_master(result.master_df))
+                    total_price_rows = 0
+                    started = time.monotonic()
+                    quality = {
+                        "market_cap_missing_before": 0,
+                        "market_cap_missing_after_enrichment": 0,
+                        "market_cap_zero_final": 0,
+                        "price_row_count": 0,
+                        "dropped_unknown_ticker_rows": 0,
+                    }
+                    batch_iter = iter_release_price_batches(
+                        release_prepared,
+                        start_date=_to_iso_date(resolved_start),
+                        end_date=_to_iso_date(resolved_end),
+                        batch_rows=200000,
+                    )
+                    for batch_idx, (batch_df, m) in enumerate(
+                        _iter_with_optional_progress(
+                            batch_iter,
+                            total=expected_batches if expected_batches > 0 else None,
+                            desc="release-upsert",
+                            use_tqdm=use_tqdm,
+                        ),
+                        start=1,
+                    ):
+                        total_price_rows += int(repo.upsert_daily_price(batch_df))
+                        quality["market_cap_missing_before"] += int(m["market_cap_missing_before"])
+                        quality["market_cap_missing_after_enrichment"] += int(m["market_cap_missing_after_enrichment"])
+                        quality["market_cap_zero_final"] += int(m["market_cap_zero_final"])
+                        quality["price_row_count"] += int(m["price_row_count"])
+                        quality["dropped_unknown_ticker_rows"] += int(m.get("dropped_unknown_ticker_rows", 0))
+                        if batch_idx == 1 or batch_idx % 5 == 0:
+                            elapsed = time.monotonic() - started
+                            logger.info(
+                                "release upsert progress: batches=%s rows=%s elapsed=%.1fs",
+                                batch_idx,
+                                total_price_rows,
+                                elapsed,
+                            )
+
+                    upsert_stats["DAILY_PRICE"] = int(total_price_rows)
+                    upsert_stats["STOCK_DIVIDEND"] = 0
+                    collection_stats["price_rows"] = int(quality["price_row_count"])
+                    collection_stats["dividend_rows"] = 0
+                    collection_stats["quality_metrics"] = {**collection_stats.get("quality_metrics", {}), **quality}
+                    logger.info(
+                        "Upsert completed: STOCK_INDUSTRY=%s, STOCK_MASTER=%s, DAILY_PRICE=%s, STOCK_DIVIDEND=%s",
+                        upsert_stats["STOCK_INDUSTRY"],
+                        upsert_stats["STOCK_MASTER"],
+                        upsert_stats["DAILY_PRICE"],
+                        upsert_stats["STOCK_DIVIDEND"],
+                    )
+                else:
+                    summary = repo.upsert_all(
+                        industry_df=result.industry_df,
+                        master_df=result.master_df,
+                        price_df=result.price_df,
+                        dividend_df=result.dividend_df,
+                    )
+                    upsert_stats = {
+                        "STOCK_INDUSTRY": int(summary.stock_industry_rows),
+                        "STOCK_MASTER": int(summary.stock_master_rows),
+                        "DAILY_PRICE": int(summary.daily_price_rows),
+                        "STOCK_DIVIDEND": int(summary.stock_dividend_rows),
+                    }
+
+                    logger.info(
+                        "Upsert completed: STOCK_INDUSTRY=%s, STOCK_MASTER=%s, DAILY_PRICE=%s, STOCK_DIVIDEND=%s",
+                        summary.stock_industry_rows,
+                        summary.stock_master_rows,
+                        summary.daily_price_rows,
+                        summary.stock_dividend_rows,
+                    )
             upsert_ended_at = dt.datetime.now(dt.timezone.utc)
-
-            upsert_stats = {
-                "STOCK_INDUSTRY": int(summary.stock_industry_rows),
-                "STOCK_MASTER": int(summary.stock_master_rows),
-                "DAILY_PRICE": int(summary.daily_price_rows),
-                "STOCK_DIVIDEND": int(summary.stock_dividend_rows),
-            }
-
-            logger.info(
-                "Upsert completed: STOCK_INDUSTRY=%s, STOCK_MASTER=%s, DAILY_PRICE=%s, STOCK_DIVIDEND=%s",
-                summary.stock_industry_rows,
-                summary.stock_master_rows,
-                summary.daily_price_rows,
-                summary.stock_dividend_rows,
-            )
         except Exception as e:
             run_error = (run_error + " | " if run_error else "") + f"upsert failed: {e}"
             logger.exception("Oracle upsert failed")
@@ -408,6 +584,7 @@ def main() -> None:
         db_stats = {"counts": {}, "price_date_range": (None, None)}
 
     report_html = _build_html_report(
+        source=args.source,
         mode=args.mode,
         resolved_start=resolved_start,
         resolved_end=resolved_end,
@@ -419,9 +596,10 @@ def main() -> None:
         collection_stats=collection_stats,
         upsert_stats=upsert_stats,
         db_stats=db_stats,
-        collect_dividends=bool(cfg.collect_dividends),
+        collect_dividends=bool(cfg.collect_dividends) if args.source == "collect" else False,
         dry_run=bool(args.dry_run),
         run_error=run_error,
+        release_info=release_info,
     )
 
     output_path = Path(args.output_html)
@@ -433,8 +611,13 @@ def main() -> None:
         sender = TelegramSender()
         res = sender.send_html_file(str(output_path), caption=args.caption)
         if not res.get("ok"):
-            raise RuntimeError(f"Telegram send failed: {res}")
-        logger.info("Telegram report send succeeded")
+            run_error = (run_error + " | " if run_error else "") + f"telegram failed: {res}"
+            logger.error("Telegram report send failed: %s", res)
+        else:
+            logger.info("Telegram report send succeeded")
+
+    if release_prepared is not None:
+        release_prepared.cleanup()
 
     if run_error:
         raise RuntimeError(run_error)
