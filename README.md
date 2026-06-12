@@ -29,6 +29,7 @@ pip install -r requirements.txt
 제공 기능:
 - 티커/종목명 검색
 - 티커 선택 시 TradingView 차트 표시
+- 종가 기준 20일 이동평균선(MA20) 표시
 - 최근 가격 데이터 표 확인
 
 참고:

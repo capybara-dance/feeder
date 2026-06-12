@@ -146,7 +146,15 @@ def _render_tradingview_widget(ticker: str, price_df: pd.DataFrame) -> None:
                 st.warning("차트 렌더링에 사용할 OHLC 데이터가 없습니다.")
                 return
 
+        chart_df = pd.DataFrame(chart_rows)
+        chart_df["ma20"] = chart_df["close"].rolling(window=20, min_periods=20).mean()
+        ma20_rows = [
+                {"time": row["time"], "value": float(row["ma20"])}
+                for _, row in chart_df.dropna(subset=["ma20"])[["time", "ma20"]].iterrows()
+        ]
+
         data_json = json.dumps(chart_rows, ensure_ascii=False)
+        ma20_json = json.dumps(ma20_rows, ensure_ascii=False)
         title_json = json.dumps(f"{ticker} - Oracle OHLCV", ensure_ascii=False)
 
         widget_html = f"""
@@ -161,6 +169,7 @@ def _render_tradingview_widget(ticker: str, price_df: pd.DataFrame) -> None:
                 if (!root || typeof LightweightCharts === "undefined") return;
 
                 const data = {data_json};
+                const ma20 = {ma20_json};
                 const candleData = data.map((d) => ({{
                     time: d.time,
                     open: Number(d.open),
@@ -171,7 +180,7 @@ def _render_tradingview_widget(ticker: str, price_df: pd.DataFrame) -> None:
                 const volumeData = data.map((d) => ({{
                     time: d.time,
                     value: Number(d.volume),
-                    color: Number(d.close) >= Number(d.open) ? "rgba(22,163,74,0.45)" : "rgba(220,38,38,0.45)",
+                    color: Number(d.close) >= Number(d.open) ? "rgba(220,38,38,0.45)" : "rgba(37,99,235,0.45)",
                 }}));
 
                 const chart = LightweightCharts.createChart(root, {{
@@ -190,13 +199,22 @@ def _render_tradingview_widget(ticker: str, price_df: pd.DataFrame) -> None:
                 }});
 
                 const candleSeries = chart.addCandlestickSeries({{
-                    upColor: "#16A34A",
-                    downColor: "#DC2626",
+                    upColor: "#DC2626",
+                    downColor: "#2563EB",
                     borderVisible: false,
-                    wickUpColor: "#16A34A",
-                    wickDownColor: "#DC2626",
+                    wickUpColor: "#DC2626",
+                    wickDownColor: "#2563EB",
                 }});
                 candleSeries.setData(candleData);
+
+                const ma20Series = chart.addLineSeries({{
+                    color: "#2563EB",
+                    lineWidth: 2,
+                    priceLineVisible: false,
+                    lastValueVisible: true,
+                    title: "MA20",
+                }});
+                ma20Series.setData(ma20);
 
                 const volumeSeries = chart.addHistogramSeries({{
                     priceFormat: {{ type: "volume" }},
