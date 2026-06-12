@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import os
 import tempfile
 from dataclasses import dataclass
@@ -8,6 +9,9 @@ from pathlib import Path
 from typing import Iterable, Mapping, Any
 
 import oracledb
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -108,12 +112,23 @@ class OracleClient:
 
         total = 0
         batch_count = 0
+        total_batches = (len(rows) + self._batch_size - 1) // self._batch_size
         with self.connection.cursor() as cur:
             for i in range(0, len(rows), self._batch_size):
                 batch = rows[i : i + self._batch_size]
                 cur.executemany(sql, batch)
                 total += len(batch)
                 batch_count += 1
+
+                if total_batches <= 5 or batch_count == 1 or batch_count % 10 == 0 or batch_count == total_batches:
+                    logger.info(
+                        "Oracle executemany progress: batch=%s/%s rows=%s/%s",
+                        batch_count,
+                        total_batches,
+                        total,
+                        len(rows),
+                    )
+
                 # Commit frequently to keep UNDO usage bounded during large upsert runs.
                 if batch_count % self._commit_every_batches == 0:
                     self.connection.commit()

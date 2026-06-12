@@ -48,6 +48,11 @@ CREATE TABLE STOCK_INDUSTRY (
                                                                                             ADJ_CLOSE      NUMBER(10, 2) NOT NULL, 
                                                                                                 VOLUME         NUMBER(15) NOT NULL,    
                                                                                                     MARKET_CAP     NUMBER(20) NOT NULL,    
+                                                                                                        RS_1M          NUMBER(6, 2),
+                                                                                                            RS_3M          NUMBER(6, 2),
+                                                                                                                RS_6M          NUMBER(6, 2),
+                                                                                                                    RS_12M         NUMBER(6, 2),
+                                                                                                                        RS_WEIGHTED    NUMBER(6, 2),
                                                                                                         CONSTRAINT PK_DAILY_PRICE PRIMARY KEY (TICKER, PRICE_DATE),
                                                                                                             CONSTRAINT FK_DAILY_PRICE_TICKER FOREIGN KEY (TICKER) REFERENCES STOCK_MASTER(TICKER)
                                                                                                             ) COMPRESS FOR OLTP;
@@ -56,6 +61,11 @@ CREATE TABLE STOCK_INDUSTRY (
                                                                                                             CREATE INDEX IX_DAILY_PRICE_DATE ON DAILY_PRICE (PRICE_DATE);
 
                                                                                                             COMMENT ON TABLE DAILY_PRICE IS '10년치 일봉 시세 및 당일 30분 주기 누적 시세 데이터 테이블';
+                                                                                                            COMMENT ON COLUMN DAILY_PRICE.RS_1M IS '1개월 상대강도(RS)';
+                                                                                                            COMMENT ON COLUMN DAILY_PRICE.RS_3M IS '3개월 상대강도(RS)';
+                                                                                                            COMMENT ON COLUMN DAILY_PRICE.RS_6M IS '6개월 상대강도(RS)';
+                                                                                                            COMMENT ON COLUMN DAILY_PRICE.RS_12M IS '12개월 상대강도(RS)';
+                                                                                                            COMMENT ON COLUMN DAILY_PRICE.RS_WEIGHTED IS '가중 상대강도(Weighted RS)';
 
                                                                                                             -- 4. STOCK_DIVIDEND (배당 및 분배금 내역)
                                                                                                             CREATE TABLE STOCK_DIVIDEND (

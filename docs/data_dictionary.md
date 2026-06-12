@@ -67,6 +67,11 @@ Mapped target: DAILY_PRICE
 | ADJ_CLOSE | float64 | NUMBER(10,2) | adjusted close (currently same as close) | rule |
 | VOLUME | float64 | NUMBER(15) | trading volume | OHLCV |
 | MARKET_CAP | float64 | NUMBER(20) | market capitalization (KRW, won) | enrichment chain |
+| RS_1M | float64 | NUMBER(6,2) | 1개월 상대강도(RS) | release/collect input (optional) |
+| RS_3M | float64 | NUMBER(6,2) | 3개월 상대강도(RS) | release/collect input (optional) |
+| RS_6M | float64 | NUMBER(6,2) | 6개월 상대강도(RS) | release/collect input (optional) |
+| RS_12M | float64 | NUMBER(6,2) | 12개월 상대강도(RS) | release/collect input (optional) |
+| RS_WEIGHTED | float64 | NUMBER(6,2) | 가중 상대강도(Weighted RS) | (RS_1M*4 + RS_3M*3 + RS_6M*2 + RS_12M*1) / 10 |
 
 Market cap enrichment chain:
 1. Native market-cap column from source data
@@ -105,7 +110,8 @@ Mapped target: STOCK_DIVIDEND
 
 ### 5.3 DAILY_PRICE
 - PK: TICKER + PRICE_DATE
-- NOT NULL: 모든 컬럼 (TICKER, PRICE_DATE, OPEN_PRICE, HIGH_PRICE, LOW_PRICE, CLOSE_PRICE, ADJ_CLOSE, VOLUME, MARKET_CAP)
+- NOT NULL: TICKER, PRICE_DATE, OPEN_PRICE, HIGH_PRICE, LOW_PRICE, CLOSE_PRICE, ADJ_CLOSE, VOLUME, MARKET_CAP
+- NULL 허용: RS_1M, RS_3M, RS_6M, RS_12M, RS_WEIGHTED
 - FK: TICKER -> STOCK_MASTER.TICKER
 
 ### 5.4 STOCK_DIVIDEND
@@ -154,11 +160,13 @@ Mapped target: STOCK_DIVIDEND
 - ADJ_CLOSE는 Oracle NUMBER(10,2) 제약을 따릅니다.
 - VOLUME은 int로 변환 후 저장합니다.
 - MARKET_CAP은 float로 변환 후 저장합니다.
+- RS_1M/RS_3M/RS_6M/RS_12M/RS_WEIGHTED는 float로 변환 후 NUMBER(6,2)로 저장합니다.
 - Oracle 제약 위반 방지를 위해 upsert 전 dtype 변환을 수행합니다.
 
 ### 7.5 Null policy
-- DAILY_PRICE는 모든 컬럼이 NOT NULL입니다.
+- DAILY_PRICE 핵심 시세 컬럼(TICKER, PRICE_DATE, OPEN/HIGH/LOW/CLOSE, ADJ_CLOSE, VOLUME, MARKET_CAP)은 NOT NULL입니다.
 - MARKET_CAP이 최종까지 결측이면 0으로 채운 뒤 저장합니다.
+- RS 컬럼은 NULL 허용이며, 릴리즈 자산에 컬럼이 없으면 경고 후 NULL로 적재합니다.
 - STOCK_DIVIDEND의 RECORD_DATE, PAYMENT_DATE는 현재 null 허용 정책입니다.
 
 ## 8. Quality Metrics Definition (Run-level)

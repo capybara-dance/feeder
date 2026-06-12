@@ -78,7 +78,12 @@ USING (
         :CLOSE_PRICE AS CLOSE_PRICE,
         :ADJ_CLOSE AS ADJ_CLOSE,
         :VOLUME AS VOLUME,
-        :MARKET_CAP AS MARKET_CAP
+        :MARKET_CAP AS MARKET_CAP,
+        :RS_1M AS RS_1M,
+        :RS_3M AS RS_3M,
+        :RS_6M AS RS_6M,
+        :RS_12M AS RS_12M,
+        :RS_WEIGHTED AS RS_WEIGHTED
     FROM dual
 ) s
 ON (t.TICKER = s.TICKER AND t.PRICE_DATE = s.PRICE_DATE)
@@ -89,7 +94,12 @@ WHEN MATCHED THEN UPDATE SET
     t.CLOSE_PRICE = s.CLOSE_PRICE,
     t.ADJ_CLOSE = s.ADJ_CLOSE,
     t.VOLUME = s.VOLUME,
-    t.MARKET_CAP = s.MARKET_CAP
+    t.MARKET_CAP = s.MARKET_CAP,
+    t.RS_1M = s.RS_1M,
+    t.RS_3M = s.RS_3M,
+    t.RS_6M = s.RS_6M,
+    t.RS_12M = s.RS_12M,
+    t.RS_WEIGHTED = s.RS_WEIGHTED
 WHEN NOT MATCHED THEN INSERT (
     TICKER,
     PRICE_DATE,
@@ -99,7 +109,12 @@ WHEN NOT MATCHED THEN INSERT (
     CLOSE_PRICE,
     ADJ_CLOSE,
     VOLUME,
-    MARKET_CAP
+    MARKET_CAP,
+    RS_1M,
+    RS_3M,
+    RS_6M,
+    RS_12M,
+    RS_WEIGHTED
 ) VALUES (
     s.TICKER,
     s.PRICE_DATE,
@@ -109,8 +124,35 @@ WHEN NOT MATCHED THEN INSERT (
     s.CLOSE_PRICE,
     s.ADJ_CLOSE,
     s.VOLUME,
-    s.MARKET_CAP
+    s.MARKET_CAP,
+    s.RS_1M,
+    s.RS_3M,
+    s.RS_6M,
+    s.RS_12M,
+    s.RS_WEIGHTED
 )
+"""
+
+DAILY_PRICE_RS_ONLY_MERGE = """
+MERGE INTO DAILY_PRICE t
+USING (
+    SELECT
+        :TICKER AS TICKER,
+        :PRICE_DATE AS PRICE_DATE,
+        :RS_1M AS RS_1M,
+        :RS_3M AS RS_3M,
+        :RS_6M AS RS_6M,
+        :RS_12M AS RS_12M,
+        :RS_WEIGHTED AS RS_WEIGHTED
+    FROM dual
+) s
+ON (t.TICKER = s.TICKER AND t.PRICE_DATE = s.PRICE_DATE)
+WHEN MATCHED THEN UPDATE SET
+    t.RS_1M = s.RS_1M,
+    t.RS_3M = s.RS_3M,
+    t.RS_6M = s.RS_6M,
+    t.RS_12M = s.RS_12M,
+    t.RS_WEIGHTED = s.RS_WEIGHTED
 """
 
 STOCK_DIVIDEND_MERGE = """

@@ -61,7 +61,7 @@ jobs:
         id: args
         shell: bash
         run: |
-          ARGS="--source release --mode full-10y --release-repo ${{ inputs.release_repo }} --batch-size ${{ inputs.batch_size }}"
+          ARGS="--source release --mode full-10y --release-repo ${{ inputs.release_repo }} --batch-size ${{ inputs.batch_size }} --tables industry,master,price"
           echo "OCI_COMMIT_EVERY_BATCHES=${{ inputs.commit_every_batches }}" >> "${GITHUB_ENV}"
 
           if [[ -n "${{ inputs.release_tag }}" ]]; then

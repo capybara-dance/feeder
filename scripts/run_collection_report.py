@@ -155,7 +155,8 @@ def _collect_db_report(sample_rows: int) -> dict[str, object]:
             FETCH FIRST {int(sample_rows)} ROWS ONLY
         """,
         "DAILY_PRICE": f"""
-            SELECT TICKER, PRICE_DATE, OPEN_PRICE, HIGH_PRICE, LOW_PRICE, CLOSE_PRICE, ADJ_CLOSE, VOLUME, MARKET_CAP
+          SELECT TICKER, PRICE_DATE, OPEN_PRICE, HIGH_PRICE, LOW_PRICE, CLOSE_PRICE, ADJ_CLOSE, VOLUME, MARKET_CAP,
+               RS_1M, RS_3M, RS_6M, RS_12M, RS_WEIGHTED
             FROM DAILY_PRICE
             ORDER BY PRICE_DATE DESC, TICKER
             FETCH FIRST {int(sample_rows)} ROWS ONLY
