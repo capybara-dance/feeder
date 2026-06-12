@@ -1,0 +1,102 @@
+name: Sync Daily Price Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_mode:
+        description: Run mode (full-10y/range)
+        required: false
+        default: full-10y
+        type: string
+      start_date:
+        description: Range mode start date (YYYY-MM-DD)
+        required: false
+        default: ""
+        type: string
+      end_date:
+        description: Range mode end date (YYYY-MM-DD)
+        required: false
+        default: ""
+        type: string
+      release_repo:
+        description: GitHub release repo (owner/name)
+        required: false
+        default: capybara-dance/capybara_fetcher
+        type: string
+      release_tag:
+        description: Optional release tag (empty = latest)
+        required: false
+        default: ""
+        type: string
+      batch_size:
+        description: Oracle executemany batch size
+        required: false
+        default: "2000"
+        type: string
+      no_progress:
+        description: Disable progress bar and use plain logs
+        required: false
+        default: false
+        type: boolean
+      dry_run:
+        description: Collect only, skip DB upsert
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  sync-daily-price-release:
+    runs-on: ubuntu-latest
+    env:
+      OCI_DB_USER: ${{ secrets.OCI_DB_USER }}
+      OCI_DB_PW: ${{ secrets.OCI_DB_PW }}
+      OCI_DB_DSN: ${{ secrets.OCI_DB_DSN }}
+      OCI_WALLET: ${{ secrets.OCI_WALLET }}
+      OCI_WALLET_PW: ${{ secrets.OCI_WALLET_PW }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID_TEST: ${{ secrets.TELEGRAM_CHAT_ID_TEST }}
+      TELEGRAM_CHAT_ID_STOCK: ${{ secrets.TELEGRAM_CHAT_ID_STOCK }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build run arguments
+        id: args
+        shell: bash
+        run: |
+          ARGS="--mode full-10y --release-repo ${{ inputs.release_repo }} --batch-size ${{ inputs.batch_size }}"
+
+          if [[ -n "${{ inputs.run_mode }}" ]]; then ARGS+=" --mode ${{ inputs.run_mode }}"; fi
+          if [[ -n "${{ inputs.start_date }}" ]]; then ARGS+=" --start-date ${{ inputs.start_date }}"; fi
+          if [[ -n "${{ inputs.end_date }}" ]]; then ARGS+=" --end-date ${{ inputs.end_date }}"; fi
+          if [[ -n "${{ inputs.release_tag }}" ]]; then ARGS+=" --release-tag ${{ inputs.release_tag }}"; fi
+          if [[ "${{ inputs.no_progress }}" == "true" ]]; then ARGS+=" --no-progress"; fi
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then ARGS+=" --dry-run"; fi
+
+          echo "args=${ARGS}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run sync_daily_price_release
+        shell: bash
+        run: |
+          python scripts/sync_daily_price_release.py ${{ steps.args.outputs.args }}
+
+      - name: Upload sync report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-daily-price-release-report-${{ github.run_id }}
+          path: reports/sync_oracle_report.html
+          if-no-files-found: warn
+          retention-days: 14

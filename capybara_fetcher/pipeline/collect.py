@@ -22,6 +22,7 @@ class CollectionConfig:
     test_limit: int = 0
     max_workers: int = 4
     adjusted: bool = True
+    collect_prices: bool = True
     collect_dividends: bool = True
     market: str | None = None
     master_json_path: str | None = None
@@ -204,31 +205,34 @@ def collect_data(cfg: CollectionConfig) -> CollectionResult:
         raise ValueError("no tickers available for collection")
 
     def fetch_one(ticker: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-        raw = provider.fetch_ohlcv(
-            ticker=ticker,
-            start_date=cfg.start_date,
-            end_date=cfg.end_date,
-            adjusted=cfg.adjusted,
-        )
-        std = standardize_ohlcv(raw, ticker=ticker)
+        if cfg.collect_prices:
+            raw = provider.fetch_ohlcv(
+                ticker=ticker,
+                start_date=cfg.start_date,
+                end_date=cfg.end_date,
+                adjusted=cfg.adjusted,
+            )
+            std = standardize_ohlcv(raw, ticker=ticker)
 
-        cap_raw = provider.fetch_market_cap(
-            ticker=ticker,
-            start_date=cfg.start_date,
-            end_date=cfg.end_date,
-        )
-        cap_std = standardize_market_cap(cap_raw)
-        if not cap_std.empty:
-            std = std.merge(cap_std, on="Date", how="left", suffixes=("", "_from_cap"))
-            if "MarketCap_from_cap" in std.columns:
-                std["MarketCap"] = std["MarketCap"].combine_first(std["MarketCap_from_cap"])
-                std = std.drop(columns=["MarketCap_from_cap"])
+            cap_raw = provider.fetch_market_cap(
+                ticker=ticker,
+                start_date=cfg.start_date,
+                end_date=cfg.end_date,
+            )
+            cap_std = standardize_market_cap(cap_raw)
+            if not cap_std.empty:
+                std = std.merge(cap_std, on="Date", how="left", suffixes=("", "_from_cap"))
+                if "MarketCap_from_cap" in std.columns:
+                    std["MarketCap"] = std["MarketCap"].combine_first(std["MarketCap_from_cap"])
+                    std = std.drop(columns=["MarketCap_from_cap"])
 
-        # Secondary fallback: KIS snapshot market cap applied only where still missing.
-        if std["MarketCap"].isna().any():
-            snapshot = provider.fetch_market_cap_snapshot(ticker=ticker)
-            if snapshot is not None and snapshot > 0:
-                std["MarketCap"] = std["MarketCap"].fillna(snapshot)
+            # Secondary fallback: KIS snapshot market cap applied only where still missing.
+            if std["MarketCap"].isna().any():
+                snapshot = provider.fetch_market_cap_snapshot(ticker=ticker)
+                if snapshot is not None and snapshot > 0:
+                    std["MarketCap"] = std["MarketCap"].fillna(snapshot)
+        else:
+            std = pd.DataFrame(columns=["Date", "Ticker", "Open", "High", "Low", "Close", "Volume", "MarketCap"])
         if cfg.collect_dividends:
             div_raw = provider.fetch_dividends(
                 ticker=ticker,

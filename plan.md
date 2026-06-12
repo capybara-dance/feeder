@@ -458,6 +458,43 @@
 ### Commands used for verification
 - `/workspaces/feeder/.venv/bin/python -m py_compile streamlit_app.py`
 
+## 26) Oracle 동기화 테이블 단위 분리 및 주기 분리 (2026-06-12)
+
+### Completed
+- `scripts/sync_oracle.py`에 `--tables` 인자를 추가해 `industry/master/price/dividend` 단위로 선택 실행 가능하도록 반영했다.
+- `source=release` 경로와 `--tables`를 결합할 때 지원하지 않는 배당 적재 요청을 명시적으로 차단했다.
+- `capybara_fetcher/pipeline/collect.py`에 `collect_prices` 옵션을 추가해 가격 적재가 필요 없는 테이블 실행 시 불필요한 OHLCV/시총 조회를 생략하도록 최적화했다.
+- 일일 주가 적재를 두 경로로 분리했다.
+  - `scripts/sync_daily_price_recent.py`: 최근 N일 provider 기반 갱신
+  - `scripts/sync_daily_price_release.py`: release 자산 기반 일괄 갱신
+- 테이블 단위 실행 스크립트를 추가했다.
+  - `scripts/sync_table_stock_master.py`
+  - `scripts/sync_table_stock_industry.py`
+  - `scripts/sync_table_stock_dividend.py`
+- 워크플로를 주기별로 분리했다.
+  - `.github/workflows/sync_daily_price_recent.yml` (매일)
+  - `.github/workflows/sync_daily_price_release.yml` (수동)
+  - `.github/workflows/sync_stock_master.yml` (주간)
+  - `.github/workflows/sync_stock_industry.yml` (월간)
+  - `.github/workflows/sync_stock_dividend.yml` (주간)
+- 기존 `.github/workflows/sync_oracle.yml`은 수동 통합 실행기 용도로 유지하고 스케줄을 제거했다.
+- `README.md`에 분리된 실행 경로/주기/워크플로를 반영했다.
+
+### In progress
+- 없음
+
+### Next 3 concrete tasks
+1. GitHub Actions에서 신규 워크플로 별 시크릿 매핑과 스케줄 충돌(동시간대 실행) 여부를 점검한다.
+2. `tests/test_sync_oracle.py`에 `--tables` 분기 및 `source=release + dividend` 예외 경로 테스트를 추가한다.
+3. 미구현 상태인 `ETF_COMPONENT` 적재 경로를 별도 스크립트/워크플로로 설계한다.
+
+### Risks/blockers
+- `sync_stock_industry.yml`의 월간 스케줄은 UTC 기준으로 관리되므로 KST 전환 시점 확인이 필요하다.
+- `sync_daily_price_release.yml`은 기본이 `full-10y`라 운영 시 입력값 검증 없이 실행하면 대량 작업이 발생할 수 있다.
+
+### Commands used for verification
+- `/workspaces/feeder/.venv/bin/python -m py_compile scripts/sync_oracle.py scripts/sync_daily_price_recent.py scripts/sync_daily_price_release.py scripts/sync_table_stock_master.py scripts/sync_table_stock_industry.py scripts/sync_table_stock_dividend.py capybara_fetcher/pipeline/collect.py`
+
 ### 추가 보완 (2026-06-12)
 - TradingView 차트 로드 시 일부 티커에서 심볼 팝업이 발생하는 문제를 줄이기 위해 `streamlit_app.py` 임베드 방식을 `advanced-chart` 위젯으로 교체했다.
 - 티커 심볼 정규화를 강화해 6자리 숫자 추출 기반으로 `KRX:{ticker}` 매핑을 수행하도록 수정했다.
