@@ -458,6 +458,29 @@
 ### Commands used for verification
 - `/workspaces/feeder/.venv/bin/python -m py_compile streamlit_app.py`
 
+## 24) daily sync 워크플로 전환 (2026-06-12)
+
+### Completed
+- `.github/workflows/sync_daily_price_recent.yml`의 스케줄을 제거해 수동 실행만 남겼다.
+- `.github/workflows/sync_daily_price_release.yml`을 최근 10일 daily syncer로 전환하고 21:00 KST 스케줄을 추가했다.
+- `scripts/sync_daily_price_recent.py`를 호출하도록 바꿔 release 파일명이더라도 실제 동작은 provider 기반 recent sync가 되도록 정리했다.
+- `README.md`의 워크플로 설명과 주기 표를 새 운영 방식에 맞게 갱신했다.
+
+### In progress
+- 없음.
+
+### Next 3 concrete tasks
+1. 새 daily 워크플로가 GitHub Actions에서 실제로 21:00 KST에 예약되는지 한 번 더 확인한다.
+2. 운영 중 release full-10y 워크플로와 daily sync 워크플로의 역할 분리가 유지되는지 점검한다.
+3. 필요하면 workflow 이름과 문서 표기를 더 명확하게 정리한다.
+
+### Risks / blockers
+- 파일명은 `release`지만 실제 동작은 recent sync라서 운영자가 파일명만 보고 역할을 오해할 수 있다.
+- `sync_daily_price_recent.py` 내부의 고정 기본값과 workflow dispatch 입력이 함께 쓰이므로, 입력 우선순위가 유지되는지 확인이 필요하다.
+
+### Commands used for verification
+- `git diff --check`
+
 ## 26) Oracle 동기화 테이블 단위 분리 및 주기 분리 (2026-06-12)
 
 ### Completed

@@ -1,51 +1,45 @@
-name: Sync Daily Price Release
+name: Sync Daily Price Release Daily Syncer
 
 on:
   workflow_dispatch:
     inputs:
-      run_mode:
-        description: Run mode (full-10y/range)
+      lookback_days:
+        description: Lookback window for missing business days
         required: false
-        default: full-10y
+        default: "10"
         type: string
-      start_date:
-        description: Range mode start date (YYYY-MM-DD)
+      test_limit:
+        description: Optional ticker limit (0 = all)
         required: false
-        default: ""
+        default: "0"
         type: string
-      end_date:
-        description: Range mode end date (YYYY-MM-DD)
+      max_workers:
+        description: Parallel workers
         required: false
-        default: ""
-        type: string
-      release_repo:
-        description: GitHub release repo (owner/name)
-        required: false
-        default: capybara-dance/capybara_fetcher
-        type: string
-      release_tag:
-        description: Optional release tag (empty = latest)
-        required: false
-        default: ""
+        default: "8"
         type: string
       batch_size:
         description: Oracle executemany batch size
         required: false
         default: "2000"
         type: string
-      no_progress:
-        description: Disable progress bar and use plain logs
+      market:
+        description: Optional market filter (KOSPI/KOSDAQ/ETF)
         required: false
-        default: false
-        type: boolean
+        default: ""
+        type: string
       dry_run:
         description: Collect only, skip DB upsert
         required: false
         default: false
         type: boolean
 
+  # Every day 21:00 KST (12:00 UTC)
+  schedule:
+    - cron: "0 12 * * *"
+
 jobs:
-  sync-daily-price-release:
+  sync-daily-price-daily:
     runs-on: ubuntu-latest
     env:
       OCI_DB_USER: ${{ secrets.OCI_DB_USER }}
@@ -76,27 +70,29 @@ jobs:
         id: args
         shell: bash
         run: |
-          ARGS="--mode full-10y --release-repo ${{ inputs.release_repo }} --batch-size ${{ inputs.batch_size }}"
+          ARGS="--lookback-days 10 --test-limit 0 --max-workers 8 --batch-size 2000"
 
-          if [[ -n "${{ inputs.run_mode }}" ]]; then ARGS+=" --mode ${{ inputs.run_mode }}"; fi
-          if [[ -n "${{ inputs.start_date }}" ]]; then ARGS+=" --start-date ${{ inputs.start_date }}"; fi
-          if [[ -n "${{ inputs.end_date }}" ]]; then ARGS+=" --end-date ${{ inputs.end_date }}"; fi
-          if [[ -n "${{ inputs.release_tag }}" ]]; then ARGS+=" --release-tag ${{ inputs.release_tag }}"; fi
-          if [[ "${{ inputs.no_progress }}" == "true" ]]; then ARGS+=" --no-progress"; fi
-          if [[ "${{ inputs.dry_run }}" == "true" ]]; then ARGS+=" --dry-run"; fi
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            if [[ -n "${{ inputs.lookback_days }}" ]]; then ARGS+=" --lookback-days ${{ inputs.lookback_days }}"; fi
+            if [[ -n "${{ inputs.test_limit }}" ]]; then ARGS+=" --test-limit ${{ inputs.test_limit }}"; fi
+            if [[ -n "${{ inputs.max_workers }}" ]]; then ARGS+=" --max-workers ${{ inputs.max_workers }}"; fi
+            if [[ -n "${{ inputs.batch_size }}" ]]; then ARGS+=" --batch-size ${{ inputs.batch_size }}"; fi
+            if [[ -n "${{ inputs.market }}" ]]; then ARGS+=" --market ${{ inputs.market }}"; fi
+            if [[ "${{ inputs.dry_run }}" == "true" ]]; then ARGS+=" --dry-run"; fi
+          fi
 
           echo "args=${ARGS}" >> "${GITHUB_OUTPUT}"
 
-      - name: Run sync_daily_price_release
+      - name: Run sync_daily_price_recent
         shell: bash
         run: |
-          python scripts/sync_daily_price_release.py ${{ steps.args.outputs.args }}
+          python scripts/sync_daily_price_recent.py ${{ steps.args.outputs.args }}
 
       - name: Upload sync report artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sync-daily-price-release-report-${{ github.run_id }}
+          name: sync-daily-price-daily-report-${{ github.run_id }}
           path: reports/sync_oracle_report.html
           if-no-files-found: warn
           retention-days: 14
