@@ -25,9 +25,11 @@ class OracleClient:
         *,
         config: OracleConnectionConfig,
         batch_size: int = 2000,
+        commit_every_batches: int = 1,
     ) -> None:
         self._config = config
         self._batch_size = int(batch_size)
+        self._commit_every_batches = max(1, int(commit_every_batches))
         self._conn: oracledb.Connection | None = None
         self._tmp_dir: tempfile.TemporaryDirectory[str] | None = None
 
@@ -38,6 +40,7 @@ class OracleClient:
         dsn = os.getenv("OCI_DB_DSN", "").strip()
         wallet_b64 = os.getenv("OCI_WALLET", "").strip() or None
         wallet_password = os.getenv("OCI_WALLET_PW", "").strip() or None
+        commit_every_batches = int(os.getenv("OCI_COMMIT_EVERY_BATCHES", "1").strip() or "1")
 
         missing = [k for k, v in {"OCI_DB_USER": user, "OCI_DB_PW": password, "OCI_DB_DSN": dsn}.items() if not v]
         if missing:
@@ -52,6 +55,7 @@ class OracleClient:
                 wallet_password=wallet_password,
             ),
             batch_size=batch_size,
+            commit_every_batches=commit_every_batches,
         )
 
     def __enter__(self) -> "OracleClient":
@@ -103,9 +107,14 @@ class OracleClient:
             return 0
 
         total = 0
+        batch_count = 0
         with self.connection.cursor() as cur:
             for i in range(0, len(rows), self._batch_size):
                 batch = rows[i : i + self._batch_size]
                 cur.executemany(sql, batch)
                 total += len(batch)
+                batch_count += 1
+                # Commit frequently to keep UNDO usage bounded during large upsert runs.
+                if batch_count % self._commit_every_batches == 0:
+                    self.connection.commit()
         return total

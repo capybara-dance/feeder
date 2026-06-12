@@ -442,3 +442,90 @@
 - `ORA-02291(FK_DAILY_PRICE_TICKER)` 대응으로 release price 배치에서 `STOCK_MASTER`에 없는 티커 행을 사전 제거하도록 보강했다.
 - upsert 진행 관측성을 위해 release 경로 배치 루프에 progress bar(`tqdm`) 및 주기적 로그를 추가했고, repository 청크 upsert에도 chunk 진행 로그를 추가했다.
 - 기존 `sync_oracle.yml`과 분리된 release full-10y 전용 워크플로 `.github/workflows/sync_oracle_release_full.yml`을 추가했다.
+- GitHub Actions에서 발생한 `ORA-30036(UNDO 부족)` 대응으로 `OracleClient.execute_many`에 주기적 커밋을 추가했고, `OCI_COMMIT_EVERY_BATCHES`(기본 1)로 커밋 주기를 조절 가능하게 했다.
+
+## 25) Streamlit 차트 TradingView 전환 (2026-06-12)
+
+### 구현 내용
+- `streamlit_app.py`의 Plotly 캔들 차트를 TradingView 위젯 임베드 방식으로 전환했다.
+- 티커를 TradingView 심볼 규칙으로 변환하는 로직을 추가했다(6자리 숫자 티커는 `KRX:{ticker}`).
+- 차트 하단 데이터 표(`DAILY_PRICE` 최근 30행)는 기존과 동일하게 Oracle DB 조회 결과를 유지한다.
+
+### 문서/의존성 반영
+- `README.md` Streamlit 기능 설명을 TradingView 기준으로 갱신했다.
+- `requirements.txt`에서 미사용 의존성 `plotly`를 제거했다.
+
+### Commands used for verification
+- `/workspaces/feeder/.venv/bin/python -m py_compile streamlit_app.py`
+
+### 추가 보완 (2026-06-12)
+- TradingView 차트 로드 시 일부 티커에서 심볼 팝업이 발생하는 문제를 줄이기 위해 `streamlit_app.py` 임베드 방식을 `advanced-chart` 위젯으로 교체했다.
+- 티커 심볼 정규화를 강화해 6자리 숫자 추출 기반으로 `KRX:{ticker}` 매핑을 수행하도록 수정했다.
+- TradingView 심볼 변환이 불가한 경우 앱에서 경고를 표시하도록 방어 로직을 추가했다.
+
+### 추가 보완 2 (2026-06-12)
+- 심볼 기반 위젯에서 발생하던 "TradingView에서만 제공되는 심볼" 팝업을 근본적으로 제거하기 위해, `streamlit_app.py`를 TradingView `lightweight-charts` 기반 렌더링으로 전환했다.
+- 차트 높이를 확대해 기존보다 더 긴 세로 뷰(약 860px, Streamlit 컴포넌트 높이 880px)로 표시되게 조정했다.
+- 외부 심볼 조회 대신 Oracle DB 조회 OHLCV를 직접 전달해 캔들/거래량 히스토그램을 렌더링하도록 변경했다.
+
+### 추가 보완 3 (2026-06-12)
+- 차트가 표시되지 않는 문제 대응으로 `lightweight-charts` CDN을 버전 고정(`4.2.0`)으로 변경해 API 호환성을 확보했다.
+- 차트 렌더링 시 컨테이너 크기 fallback(`width/height`)을 추가하고, 실패 시 컴포넌트 내부 오류 메시지를 표시하도록 방어 로직을 추가했다.
+- 세로 길이를 추가 확대해 Streamlit 컴포넌트 높이를 `920px`로 조정했다.
+
+### 추가 보완 4 (2026-06-12)
+- 사용자 요청에 따라 차트를 TradingView `lightweight-charts` 방식에서 기본 `advanced-chart` 위젯으로 롤백했다.
+- 드로잉/도구 UI가 다시 보이도록 `hide_side_toolbar=false` 설정으로 복원했다.
+- 세로 길이는 유지/확대 상태로 적용해 차트 영역이 짧아 보이지 않도록 `height`를 상향 유지했다.
+
+### 추가 보완 5 (2026-06-12)
+- 사용자 요청에 따라 TradingView 기본 위젯의 세로 높이를 추가로 확대했다(컨테이너 1100px, Streamlit 컴포넌트 1120px).
+
+### 추가 보완 6 (2026-06-12)
+- 세로 높이 반영 안정성과 심볼 오류 시 AAPL 폴백 문제 완화를 위해 `streamlit_app.py` 차트 렌더링을 TradingView 스크립트 임베드에서 `widgetembed` iframe 방식으로 전환했다.
+- 차트 높이를 1320px(컴포넌트 1340px)로 상향해 Streamlit iframe 내부에서도 높이가 확실히 반영되도록 조정했다.
+- 검색 결과 중 숫자 6자리 티커 개수를 안내해 TradingView 지원 가능 티커를 사용자가 쉽게 구분할 수 있게 했다.
+
+### 추가 보완 7 (2026-06-12)
+- 차트 세로 길이가 과도하다는 피드백에 따라 고정 높이(1320px)를 제거하고, TradingView iframe 컨테이너를 `aspect-ratio: 6 / 4` 비율로 렌더링하도록 변경했다.
+
+### 추가 보완 8 (2026-06-12)
+- 사용자 요청에 따라 Streamlit 차트를 TradingView 심볼 위젯 방식에서 `Lightweight Charts Library` 방식으로 전환했다.
+- 차트 렌더링 데이터는 외부 심볼/시세를 사용하지 않고 Oracle DB(`DAILY_PRICE`) 조회 OHLCV만 사용하도록 고정했다.
+- 차트 비율은 기존 요청대로 `6:4`를 유지했다.
+
+### 추가 보완 9 (2026-06-12)
+- 기본 선택 종목 `069500`이 빈 검색 결과 상위 200개 제한에 밀려 보이지 않는 문제를 보완하기 위해, `search_tickers`의 기본 정렬에 `TICKER='069500'` 우선순위를 추가했다.
+
+### 추가 보완 10 (2026-06-12)
+- Streamlit Lightweight Charts 차트에 Oracle 종가 기준 20일 이동평균선(MA20) 라인 시리즈를 추가했다.
+
+### 추가 보완 11 (2026-06-12)
+- 사용자 요청에 따라 Lightweight Charts 캔들/거래량 색상을 한국식 표기(상승 빨강, 하락 파랑)로 변경했다.
+
+### 추가 보완 12 (2026-06-12)
+- Streamlit Lightweight Charts 차트에 샹들리에 Exit 라인(기본 파라미터: 기간 22, ATR 배수 3.0)을 추가했다.
+
+### 추가 보완 13 (2026-06-12)
+- 샹들리에 Exit 파라미터를 화면에서 조절할 수 있도록 옵션 입력(CH Period, ATR Period, ATR Mult)을 추가했다.
+- 사용자 요청에 따라 ATR 배수 기본값을 `3.0`에서 `2.0`으로 변경했다.
+
+### 추가 보완 14 (2026-06-12)
+- 샹들리에 라인을 Long/Short 모두 계산하도록 확장하고, 화면에서 표시 대상을 선택할 수 있는 옵션을 추가했다.
+
+### 추가 보완 15 (2026-06-12)
+- 이동평균선(MA) 표시를 선택형으로 확장했다(5, 10, 20, 60, 120, 200).
+- MA 기본 선택값은 사용자 요청에 따라 20일선만 활성화하도록 변경했다.
+
+### 추가 보완 16 (2026-06-12)
+- Streamlit 조회 기본 기간을 최근 1년에서 최근 5년으로 확장했다.
+
+### 추가 보완 17 (2026-06-12)
+- 차트는 5년치 데이터를 로드하되, 초기 화면은 최근 1년만 보이도록 설정했다. 확대/축소 시 과거 5년 데이터를 탐색할 수 있다.
+
+### 추가 보완 18 (2026-06-12)
+- Streamlit 차트에 일봉/주봉/월봉 토글을 추가했다.
+- 주봉/월봉은 Oracle 일봉 데이터를 내부에서 리샘플링해서 그린다.
+
+### 추가 보완 19 (2026-06-12)
+- Streamlit 차트에 캔들 / 바(시고저종) 토글을 추가했다.

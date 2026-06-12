@@ -28,8 +28,19 @@ pip install -r requirements.txt
 
 제공 기능:
 - 티커/종목명 검색
-- 티커 선택 시 최근 1년 캔들 차트 표시
-- 최근 가격 데이터 표 확인
+- 티커 선택 시 TradingView 차트 표시
+- 일봉/주봉/월봉 토글 가능
+- 캔들 / 바(시고저종) 토글 가능
+- 이동평균선 선택 표시(5, 10, 20, 60, 120, 200 / 기본 20)
+- 샹들리에 Exit 라인 표시(기본 22, ATR x 2)
+- 샹들리에/ATR 파라미터 조절 옵션 제공(CH Period, ATR Period, ATR Mult)
+- 샹들리에 라인 표시 선택 제공(Long, Short)
+- 기본 조회 기간은 최근 5년입니다.
+- 차트는 기본적으로 최근 1년만 보이도록 열리고, 확대/스크롤로 5년치 데이터를 볼 수 있습니다.
+
+참고:
+- TradingView Lightweight Charts Library로 렌더링합니다.
+- 차트 데이터는 Oracle DB(`DAILY_PRICE`) 조회 결과만 사용합니다.
 
 ## 데이터 명세 문서
 
@@ -249,6 +260,11 @@ GitHub Release 기반 적재(초기 10년치 권장):
 	--release-repo capybara-dance/capybara_fetcher \
 	--no-send-report
 ```
+
+UNDO 관련 오류(`ORA-30036`) 대응:
+- 대량 upsert 시 트랜잭션이 길어지면 UNDO tablespace 부족이 발생할 수 있습니다.
+- `OCI_COMMIT_EVERY_BATCHES` 환경변수로 `executemany` 커밋 주기를 조절할 수 있습니다(기본값 `1`, 즉 배치마다 커밋).
+- release full-10y 전용 workflow에서는 `commit_every_batches` 입력값으로 동일 설정을 제어할 수 있습니다.
 
 배당 수집 비활성화(속도 최적화):
 
