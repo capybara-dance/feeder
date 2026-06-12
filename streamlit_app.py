@@ -86,7 +86,7 @@ def search_tickers(keyword: str, limit: int = 200) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
-def load_price_history(ticker: str, years: int = 1) -> pd.DataFrame:
+def load_price_history(ticker: str, years: int = 5) -> pd.DataFrame:
     start_date = dt.datetime.now() - dt.timedelta(days=365 * years)
 
     with OracleClient.from_env(batch_size=500) as client:
@@ -124,9 +124,56 @@ def load_price_history(ticker: str, years: int = 1) -> pd.DataFrame:
     return price_df
 
 
-def _render_tradingview_widget(ticker: str, price_df: pd.DataFrame) -> None:
+def _resample_price_history(price_df: pd.DataFrame, interval: str) -> pd.DataFrame:
+    if price_df.empty:
+        return price_df
+
+    interval = interval.lower()
+    if interval == "daily":
+        return price_df.copy()
+
+    freq_map = {
+        "weekly": "W-FRI",
+        "monthly": "M",
+    }
+    freq = freq_map.get(interval)
+    if freq is None:
+        return price_df.copy()
+
+    resampled = (
+        price_df.copy()
+        .sort_values("PRICE_DATE")
+        .set_index("PRICE_DATE")
+        .resample(freq)
+        .agg(
+            OPEN_PRICE=("OPEN_PRICE", "first"),
+            HIGH_PRICE=("HIGH_PRICE", "max"),
+            LOW_PRICE=("LOW_PRICE", "min"),
+            CLOSE_PRICE=("CLOSE_PRICE", "last"),
+            VOLUME=("VOLUME", "sum"),
+        )
+        .dropna(subset=["OPEN_PRICE", "HIGH_PRICE", "LOW_PRICE", "CLOSE_PRICE"])
+        .reset_index()
+    )
+    return resampled
+
+
+def _render_tradingview_widget(
+        ticker: str,
+        price_df: pd.DataFrame,
+    interval: str,
+    chart_type: str,
+        atr_period: int,
+        chandelier_period: int,
+        chandelier_mult: float,
+    ma_periods: list[int],
+    show_ch_long: bool,
+    show_ch_short: bool,
+) -> None:
+        chart_df_raw = _resample_price_history(price_df, interval)
+
         chart_rows: list[dict[str, float | str]] = []
-        for row in price_df.itertuples(index=False):
+        for row in chart_df_raw.itertuples(index=False):
                 if pd.isna(row.OPEN_PRICE) or pd.isna(row.HIGH_PRICE) or pd.isna(row.LOW_PRICE) or pd.isna(row.CLOSE_PRICE):
                         continue
 
@@ -147,15 +194,64 @@ def _render_tradingview_widget(ticker: str, price_df: pd.DataFrame) -> None:
                 return
 
         chart_df = pd.DataFrame(chart_rows)
-        chart_df["ma20"] = chart_df["close"].rolling(window=20, min_periods=20).mean()
-        ma20_rows = [
-                {"time": row["time"], "value": float(row["ma20"])}
-                for _, row in chart_df.dropna(subset=["ma20"])[["time", "ma20"]].iterrows()
+        latest_price_date = pd.to_datetime(chart_df["time"]).max()
+        initial_visible_start = (latest_price_date - pd.DateOffset(years=1)).strftime("%Y-%m-%d")
+        initial_visible_end = latest_price_date.strftime("%Y-%m-%d")
+        ma_rows_map: dict[str, list[dict[str, float | str]]] = {}
+        for period in ma_periods:
+            ma_col = f"ma_{period}"
+            chart_df[ma_col] = chart_df["close"].rolling(window=period, min_periods=period).mean()
+            ma_rows_map[str(period)] = [
+                {"time": row["time"], "value": float(row[ma_col])}
+                for _, row in chart_df.dropna(subset=[ma_col])[["time", ma_col]].iterrows()
+            ]
+
+        prev_close = chart_df["close"].shift(1)
+        tr_components = pd.concat(
+                [
+                        chart_df["high"] - chart_df["low"],
+                        (chart_df["high"] - prev_close).abs(),
+                        (chart_df["low"] - prev_close).abs(),
+                ],
+                axis=1,
+        )
+        chart_df["tr"] = tr_components.max(axis=1)
+        chart_df["atr"] = chart_df["tr"].ewm(alpha=1 / atr_period, adjust=False, min_periods=atr_period).mean()
+        chart_df["highest_high"] = chart_df["high"].rolling(window=chandelier_period, min_periods=chandelier_period).max()
+        chart_df["lowest_low"] = chart_df["low"].rolling(window=chandelier_period, min_periods=chandelier_period).min()
+        chart_df["chandelier_exit_long"] = chart_df["highest_high"] - (chart_df["atr"] * chandelier_mult)
+        chart_df["chandelier_exit_short"] = chart_df["lowest_low"] + (chart_df["atr"] * chandelier_mult)
+
+        chandelier_long_rows = [
+            {"time": row["time"], "value": float(row["chandelier_exit_long"])}
+            for _, row in chart_df.dropna(subset=["chandelier_exit_long"])[["time", "chandelier_exit_long"]].iterrows()
+        ]
+        chandelier_short_rows = [
+            {"time": row["time"], "value": float(row["chandelier_exit_short"])}
+            for _, row in chart_df.dropna(subset=["chandelier_exit_short"])[["time", "chandelier_exit_short"]].iterrows()
         ]
 
         data_json = json.dumps(chart_rows, ensure_ascii=False)
-        ma20_json = json.dumps(ma20_rows, ensure_ascii=False)
+        ma_rows_map_json = json.dumps(ma_rows_map, ensure_ascii=False)
+        ma_periods_json = json.dumps(ma_periods, ensure_ascii=False)
+        ma_color_map_json = json.dumps(
+            {
+                "5": "#EF4444",
+                "10": "#F97316",
+                "20": "#2563EB",
+                "60": "#16A34A",
+                "120": "#7C3AED",
+                "200": "#334155",
+            },
+            ensure_ascii=False,
+        )
+        chandelier_long_json = json.dumps(chandelier_long_rows, ensure_ascii=False)
+        chandelier_short_json = json.dumps(chandelier_short_rows, ensure_ascii=False)
         title_json = json.dumps(f"{ticker} - Oracle OHLCV", ensure_ascii=False)
+        chandelier_long_title_json = json.dumps(f"CH Long({chandelier_period},{chandelier_mult:g})", ensure_ascii=False)
+        chandelier_short_title_json = json.dumps(f"CH Short({chandelier_period},{chandelier_mult:g})", ensure_ascii=False)
+        show_ch_long_json = json.dumps(show_ch_long)
+        show_ch_short_json = json.dumps(show_ch_short)
 
         widget_html = f"""
         <div style="width:100%; border:1px solid #E5E7EB; border-radius:8px; overflow:hidden; background:#fff;">
@@ -169,7 +265,15 @@ def _render_tradingview_widget(ticker: str, price_df: pd.DataFrame) -> None:
                 if (!root || typeof LightweightCharts === "undefined") return;
 
                 const data = {data_json};
-                const ma20 = {ma20_json};
+                const maRowsMap = {ma_rows_map_json};
+                const maPeriods = {ma_periods_json};
+                const maColorMap = {ma_color_map_json};
+                const chandelierLong = {chandelier_long_json};
+                const chandelierShort = {chandelier_short_json};
+                const chandelierLongTitle = {chandelier_long_title_json};
+                const chandelierShortTitle = {chandelier_short_title_json};
+                const showChLong = {show_ch_long_json};
+                const showChShort = {show_ch_short_json};
                 const candleData = data.map((d) => ({{
                     time: d.time,
                     open: Number(d.open),
@@ -198,23 +302,68 @@ def _render_tradingview_widget(ticker: str, price_df: pd.DataFrame) -> None:
                     timeScale: {{ borderColor: "#E5E7EB", timeVisible: true }},
                 }});
 
-                const candleSeries = chart.addCandlestickSeries({{
-                    upColor: "#DC2626",
-                    downColor: "#2563EB",
-                    borderVisible: false,
-                    wickUpColor: "#DC2626",
-                    wickDownColor: "#2563EB",
-                }});
-                candleSeries.setData(candleData);
+                const chartType = {json.dumps(chart_type)};
+                if (chartType === "bar") {{
+                    const barSeries = chart.addBarSeries({{
+                        upColor: "#DC2626",
+                        downColor: "#2563EB",
+                    }});
+                    barSeries.setData(candleData.map((d) => ({{
+                        time: d.time,
+                        open: d.open,
+                        high: d.high,
+                        low: d.low,
+                        close: d.close,
+                    }})));
+                }} else {{
+                    const candleSeries = chart.addCandlestickSeries({{
+                        upColor: "#DC2626",
+                        downColor: "#2563EB",
+                        borderVisible: false,
+                        wickUpColor: "#DC2626",
+                        wickDownColor: "#2563EB",
+                    }});
+                    candleSeries.setData(candleData);
+                }}
 
-                const ma20Series = chart.addLineSeries({{
-                    color: "#2563EB",
-                    lineWidth: 2,
-                    priceLineVisible: false,
-                    lastValueVisible: true,
-                    title: "MA20",
+                maPeriods.forEach((period) => {{
+                    const key = String(period);
+                    const maRows = maRowsMap[key] || [];
+                    if (maRows.length === 0) return;
+
+                    const maSeries = chart.addLineSeries({{
+                        color: maColorMap[key] || "#2563EB",
+                        lineWidth: 2,
+                        priceLineVisible: false,
+                        lastValueVisible: true,
+                        title: `MA${{key}}`,
+                    }});
+                    maSeries.setData(maRows);
                 }});
-                ma20Series.setData(ma20);
+
+                if (showChLong && chandelierLong.length > 0) {{
+                    const chandelierLongSeries = chart.addLineSeries({{
+                        color: "#F97316",
+                        lineWidth: 2,
+                        lineStyle: 2,
+                        priceLineVisible: false,
+                        lastValueVisible: true,
+                        title: chandelierLongTitle,
+                    }});
+                    chandelierLongSeries.setData(chandelierLong);
+                }}
+
+                if (showChShort && chandelierShort.length > 0) {{
+                    const chandelierShortSeries = chart.addLineSeries({{
+                        color: "#7C3AED",
+                        lineWidth: 2,
+                        lineStyle: 2,
+                        priceLineVisible: false,
+                        lastValueVisible: true,
+                        title: chandelierShortTitle,
+                    }});
+                    chandelierShortSeries.setData(chandelierShort);
+                }}
 
                 const volumeSeries = chart.addHistogramSeries({{
                     priceFormat: {{ type: "volume" }},
@@ -236,7 +385,10 @@ def _render_tradingview_widget(ticker: str, price_df: pd.DataFrame) -> None:
                     }},
                 }});
 
-                chart.timeScale().fitContent();
+                chart.timeScale().setVisibleRange({{
+                    from: {json.dumps(initial_visible_start)},
+                    to: {json.dumps(initial_visible_end)},
+                }});
 
                 if (typeof ResizeObserver !== "undefined") {{
                     const ro = new ResizeObserver(() => {{
@@ -290,21 +442,60 @@ def main() -> None:
     selected_ticker = str(ticker_df.loc[selected_idx, "TICKER"])
 
     try:
-        price_df = load_price_history(selected_ticker, years=1)
+        price_df = load_price_history(selected_ticker, years=5)
     except Exception as exc:
         st.error(f"Failed to query price data from Oracle DB: {exc}")
         return
 
     if price_df.empty:
-        st.warning(f"No price data in last 1 year for ticker: {selected_ticker}")
+        st.warning(f"No price data in last 5 years for ticker: {selected_ticker}")
         return
+
+    interval_labels = {"일봉": "daily", "주봉": "weekly", "월봉": "monthly"}
+    selected_interval_label = st.radio("Chart Interval", list(interval_labels.keys()), horizontal=True, index=0)
+    selected_interval = interval_labels[selected_interval_label]
+
+    option_col1, option_col2, option_col3 = st.columns(3)
+    with option_col1:
+        chandelier_period = st.number_input("CH Period", min_value=5, max_value=120, value=22, step=1)
+    with option_col2:
+        atr_period = st.number_input("ATR Period", min_value=5, max_value=120, value=22, step=1)
+    with option_col3:
+        chandelier_mult = st.number_input("ATR Mult", min_value=0.5, max_value=10.0, value=2.0, step=0.1)
+
+    ma_period_options = [5, 10, 20, 60, 120, 200]
+    ma_periods = st.multiselect(
+        "MA Lines",
+        options=ma_period_options,
+        default=[20],
+    )
+
+    ch_line_options = st.multiselect(
+        "Chandelier Lines",
+        options=["Long", "Short"],
+        default=["Long"],
+    )
+    show_ch_long = "Long" in ch_line_options
+    show_ch_short = "Short" in ch_line_options
+
+    chart_style_options = {"캔들": "candle", "바(시고저종)": "bar"}
+    selected_chart_style_label = st.radio("Chart Style", list(chart_style_options.keys()), horizontal=True, index=0)
+    selected_chart_style = chart_style_options[selected_chart_style_label]
 
     st.subheader(f"TradingView Chart ({selected_ticker})")
     st.caption("TradingView Lightweight Charts로 Oracle DB 조회 OHLCV만 렌더링합니다.")
-    _render_tradingview_widget(selected_ticker, price_df)
-
-    st.subheader("Recent rows")
-    st.dataframe(price_df.tail(30), use_container_width=True, hide_index=True)
+    _render_tradingview_widget(
+        selected_ticker,
+        price_df,
+        interval=selected_interval,
+        chart_type=selected_chart_style,
+        atr_period=int(atr_period),
+        chandelier_period=int(chandelier_period),
+        chandelier_mult=float(chandelier_mult),
+        ma_periods=[int(period) for period in ma_periods],
+        show_ch_long=show_ch_long,
+        show_ch_short=show_ch_short,
+    )
 
 
 if __name__ == "__main__":

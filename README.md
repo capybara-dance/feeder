@@ -29,8 +29,14 @@ pip install -r requirements.txt
 제공 기능:
 - 티커/종목명 검색
 - 티커 선택 시 TradingView 차트 표시
-- 종가 기준 20일 이동평균선(MA20) 표시
-- 최근 가격 데이터 표 확인
+- 일봉/주봉/월봉 토글 가능
+- 캔들 / 바(시고저종) 토글 가능
+- 이동평균선 선택 표시(5, 10, 20, 60, 120, 200 / 기본 20)
+- 샹들리에 Exit 라인 표시(기본 22, ATR x 2)
+- 샹들리에/ATR 파라미터 조절 옵션 제공(CH Period, ATR Period, ATR Mult)
+- 샹들리에 라인 표시 선택 제공(Long, Short)
+- 기본 조회 기간은 최근 5년입니다.
+- 차트는 기본적으로 최근 1년만 보이도록 열리고, 확대/스크롤로 5년치 데이터를 볼 수 있습니다.
 
 참고:
 - TradingView Lightweight Charts Library로 렌더링합니다.
