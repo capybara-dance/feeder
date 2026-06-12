@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import sys
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+from streamlit.runtime.scriptrunner import get_script_run_ctx
+from streamlit.web import cli as stcli
 
 from capybara_fetcher.db import OracleClient
 from scripts.dotenv_loader import load_dotenv_if_present
@@ -14,6 +18,154 @@ from scripts.dotenv_loader import load_dotenv_if_present
 
 REPO_ROOT = Path(__file__).resolve().parent
 load_dotenv_if_present(REPO_ROOT / ".env")
+
+
+def _run_via_streamlit() -> None:
+    sys.argv = ["streamlit", "run", str(Path(__file__).resolve()), *sys.argv[1:]]
+    raise SystemExit(stcli.main())
+
+
+if __name__ == "__main__" and get_script_run_ctx() is None:
+    _run_via_streamlit()
+
+
+TABLE_CONFIGS: list[dict[str, Any]] = [
+    {
+        "name": "STOCK_MASTER",
+        "label": "종목 마스터",
+        "description": "티커, 종목명, 시장 구분, 자산 유형 등 종목 기준 정보를 조회합니다.",
+        "search_columns": ["TICKER", "STOCK_NAME", "MARKET_CODE", "ASSET_TYPE"],
+        "order_by": "UPDATED_AT DESC NULLS LAST, TICKER",
+        "date_column": "UPDATED_AT",
+    },
+    {
+        "name": "DAILY_PRICE",
+        "label": "일별 시세",
+        "description": "Oracle DB에 적재된 일봉 OHLCV와 시가총액 데이터를 최신순으로 조회합니다.",
+        "search_columns": ["TICKER"],
+        "order_by": "PRICE_DATE DESC, TICKER",
+        "date_column": "PRICE_DATE",
+    },
+    {
+        "name": "STOCK_DIVIDEND",
+        "label": "배당 내역",
+        "description": "종목별 배당락일, 배당금, 지급일 등 배당 정보를 조회합니다.",
+        "search_columns": ["TICKER", "DIVIDEND_TYPE"],
+        "order_by": "EX_DIVIDEND_DATE DESC, TICKER",
+        "date_column": "EX_DIVIDEND_DATE",
+    },
+    {
+        "name": "ETF_COMPONENT",
+        "label": "ETF 구성 종목",
+        "description": "ETF 기준 편입 종목과 비중, 기준일 데이터를 조회합니다.",
+        "search_columns": ["ETF_TICKER", "COMPONENT_TICKER"],
+        "order_by": "BASE_DATE DESC, ETF_TICKER, COMPONENT_TICKER",
+        "date_column": "BASE_DATE",
+    },
+    {
+        "name": "STOCK_INDUSTRY",
+        "label": "업종 마스터",
+        "description": "산업 분류 대/중/소 업종 코드와 설명 정보를 조회합니다.",
+        "search_columns": ["INDUSTRY_CODE", "LARGE_CLASS", "MEDIUM_CLASS", "SMALL_CLASS"],
+        "order_by": "INDUSTRY_CODE",
+        "date_column": None,
+    },
+]
+TABLE_CONFIG_MAP = {config["name"]: config for config in TABLE_CONFIGS}
+
+
+def _get_table_config(table_name: str) -> dict[str, Any]:
+    config = TABLE_CONFIG_MAP.get(table_name)
+    if config is None:
+        raise ValueError(f"Unsupported table: {table_name}")
+    return config
+
+
+def _coerce_display_df(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    display_df = df.copy()
+    for column in display_df.columns:
+        if any(token in column for token in ["DATE", "_AT"]):
+            display_df[column] = pd.to_datetime(display_df[column], errors="coerce")
+    return display_df
+
+
+@st.cache_data(ttl=300)
+def get_table_schema(table_name: str) -> pd.DataFrame:
+    _get_table_config(table_name)
+
+    with OracleClient.from_env(batch_size=500) as client:
+        conn = client.connection
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COLUMN_NAME, DATA_TYPE, NULLABLE
+                FROM USER_TAB_COLUMNS
+                WHERE TABLE_NAME = :table_name
+                ORDER BY COLUMN_ID
+                """,
+                {"table_name": table_name.upper()},
+            )
+            rows = cur.fetchall()
+
+    return pd.DataFrame(rows, columns=["COLUMN_NAME", "DATA_TYPE", "NULLABLE"])
+
+
+@st.cache_data(ttl=300)
+def get_table_stats(table_name: str) -> dict[str, Any]:
+    config = _get_table_config(table_name)
+    date_column = config.get("date_column")
+    date_select = ""
+    if date_column:
+        date_select = f", MIN({date_column}) AS MIN_DATE, MAX({date_column}) AS MAX_DATE"
+
+    query = f"SELECT COUNT(*) AS ROW_COUNT{date_select} FROM {table_name}"
+
+    with OracleClient.from_env(batch_size=500) as client:
+        conn = client.connection
+        with conn.cursor() as cur:
+            cur.execute(query)
+            row = cur.fetchone()
+
+    stats: dict[str, Any] = {"row_count": int(row[0]) if row else 0}
+    if date_column:
+        stats["min_date"] = row[1] if row and len(row) > 1 else None
+        stats["max_date"] = row[2] if row and len(row) > 2 else None
+    return stats
+
+
+@st.cache_data(ttl=120)
+def load_table_preview(table_name: str, limit: int = 100, keyword: str = "") -> pd.DataFrame:
+    config = _get_table_config(table_name)
+    limit_value = max(1, int(limit))
+    keyword_value = keyword.strip().upper()
+    search_columns = config.get("search_columns") or []
+
+    filters: list[str] = []
+    params: dict[str, Any] = {"limit": limit_value}
+    if keyword_value and search_columns:
+        search_clauses = [f"UPPER({column}) LIKE :keyword_like" for column in search_columns]
+        filters.append("(" + " OR ".join(search_clauses) + ")")
+        params["keyword_like"] = f"%{keyword_value}%"
+
+    where_clause = f" WHERE {' AND '.join(filters)}" if filters else ""
+    query = (
+        f"SELECT * FROM ("
+        f" SELECT * FROM {table_name}{where_clause}"
+        f" ORDER BY {config['order_by']}"
+        f") WHERE ROWNUM <= :limit"
+    )
+
+    with OracleClient.from_env(batch_size=500) as client:
+        conn = client.connection
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+            columns = [description[0] for description in cur.description]
+
+    return _coerce_display_df(pd.DataFrame(rows, columns=columns))
 
 
 @st.cache_data(ttl=300)
@@ -159,101 +311,101 @@ def _resample_price_history(price_df: pd.DataFrame, interval: str) -> pd.DataFra
 
 
 def _render_tradingview_widget(
-        ticker: str,
-        price_df: pd.DataFrame,
+    ticker: str,
+    price_df: pd.DataFrame,
     interval: str,
     chart_type: str,
-        atr_period: int,
-        chandelier_period: int,
-        chandelier_mult: float,
+    atr_period: int,
+    chandelier_period: int,
+    chandelier_mult: float,
     ma_periods: list[int],
     show_ch_long: bool,
     show_ch_short: bool,
 ) -> None:
-        chart_df_raw = _resample_price_history(price_df, interval)
+    chart_df_raw = _resample_price_history(price_df, interval)
 
-        chart_rows: list[dict[str, float | str]] = []
-        for row in chart_df_raw.itertuples(index=False):
-                if pd.isna(row.OPEN_PRICE) or pd.isna(row.HIGH_PRICE) or pd.isna(row.LOW_PRICE) or pd.isna(row.CLOSE_PRICE):
-                        continue
+    chart_rows: list[dict[str, float | str]] = []
+    for row in chart_df_raw.itertuples(index=False):
+        if pd.isna(row.OPEN_PRICE) or pd.isna(row.HIGH_PRICE) or pd.isna(row.LOW_PRICE) or pd.isna(row.CLOSE_PRICE):
+            continue
 
-                volume_value = float(row.VOLUME) if not pd.isna(row.VOLUME) else 0.0
-                chart_rows.append(
-                        {
-                                "time": pd.Timestamp(row.PRICE_DATE).strftime("%Y-%m-%d"),
-                                "open": float(row.OPEN_PRICE),
-                                "high": float(row.HIGH_PRICE),
-                                "low": float(row.LOW_PRICE),
-                                "close": float(row.CLOSE_PRICE),
-                                "volume": volume_value,
-                        }
-                )
-
-        if not chart_rows:
-                st.warning("차트 렌더링에 사용할 OHLC 데이터가 없습니다.")
-                return
-
-        chart_df = pd.DataFrame(chart_rows)
-        latest_price_date = pd.to_datetime(chart_df["time"]).max()
-        initial_visible_start = (latest_price_date - pd.DateOffset(years=1)).strftime("%Y-%m-%d")
-        initial_visible_end = latest_price_date.strftime("%Y-%m-%d")
-        ma_rows_map: dict[str, list[dict[str, float | str]]] = {}
-        for period in ma_periods:
-            ma_col = f"ma_{period}"
-            chart_df[ma_col] = chart_df["close"].rolling(window=period, min_periods=period).mean()
-            ma_rows_map[str(period)] = [
-                {"time": row["time"], "value": float(row[ma_col])}
-                for _, row in chart_df.dropna(subset=[ma_col])[["time", ma_col]].iterrows()
-            ]
-
-        prev_close = chart_df["close"].shift(1)
-        tr_components = pd.concat(
-                [
-                        chart_df["high"] - chart_df["low"],
-                        (chart_df["high"] - prev_close).abs(),
-                        (chart_df["low"] - prev_close).abs(),
-                ],
-                axis=1,
-        )
-        chart_df["tr"] = tr_components.max(axis=1)
-        chart_df["atr"] = chart_df["tr"].ewm(alpha=1 / atr_period, adjust=False, min_periods=atr_period).mean()
-        chart_df["highest_high"] = chart_df["high"].rolling(window=chandelier_period, min_periods=chandelier_period).max()
-        chart_df["lowest_low"] = chart_df["low"].rolling(window=chandelier_period, min_periods=chandelier_period).min()
-        chart_df["chandelier_exit_long"] = chart_df["highest_high"] - (chart_df["atr"] * chandelier_mult)
-        chart_df["chandelier_exit_short"] = chart_df["lowest_low"] + (chart_df["atr"] * chandelier_mult)
-
-        chandelier_long_rows = [
-            {"time": row["time"], "value": float(row["chandelier_exit_long"])}
-            for _, row in chart_df.dropna(subset=["chandelier_exit_long"])[["time", "chandelier_exit_long"]].iterrows()
-        ]
-        chandelier_short_rows = [
-            {"time": row["time"], "value": float(row["chandelier_exit_short"])}
-            for _, row in chart_df.dropna(subset=["chandelier_exit_short"])[["time", "chandelier_exit_short"]].iterrows()
-        ]
-
-        data_json = json.dumps(chart_rows, ensure_ascii=False)
-        ma_rows_map_json = json.dumps(ma_rows_map, ensure_ascii=False)
-        ma_periods_json = json.dumps(ma_periods, ensure_ascii=False)
-        ma_color_map_json = json.dumps(
+        volume_value = float(row.VOLUME) if not pd.isna(row.VOLUME) else 0.0
+        chart_rows.append(
             {
-                "5": "#EF4444",
-                "10": "#F97316",
-                "20": "#2563EB",
-                "60": "#16A34A",
-                "120": "#7C3AED",
-                "200": "#334155",
-            },
-            ensure_ascii=False,
+                "time": pd.Timestamp(row.PRICE_DATE).strftime("%Y-%m-%d"),
+                "open": float(row.OPEN_PRICE),
+                "high": float(row.HIGH_PRICE),
+                "low": float(row.LOW_PRICE),
+                "close": float(row.CLOSE_PRICE),
+                "volume": volume_value,
+            }
         )
-        chandelier_long_json = json.dumps(chandelier_long_rows, ensure_ascii=False)
-        chandelier_short_json = json.dumps(chandelier_short_rows, ensure_ascii=False)
-        title_json = json.dumps(f"{ticker} - Oracle OHLCV", ensure_ascii=False)
-        chandelier_long_title_json = json.dumps(f"CH Long({chandelier_period},{chandelier_mult:g})", ensure_ascii=False)
-        chandelier_short_title_json = json.dumps(f"CH Short({chandelier_period},{chandelier_mult:g})", ensure_ascii=False)
-        show_ch_long_json = json.dumps(show_ch_long)
-        show_ch_short_json = json.dumps(show_ch_short)
 
-        widget_html = f"""
+    if not chart_rows:
+        st.warning("차트 렌더링에 사용할 OHLC 데이터가 없습니다.")
+        return
+
+    chart_df = pd.DataFrame(chart_rows)
+    latest_price_date = pd.to_datetime(chart_df["time"]).max()
+    initial_visible_start = (latest_price_date - pd.DateOffset(years=1)).strftime("%Y-%m-%d")
+    initial_visible_end = latest_price_date.strftime("%Y-%m-%d")
+    ma_rows_map: dict[str, list[dict[str, float | str]]] = {}
+    for period in ma_periods:
+        ma_col = f"ma_{period}"
+        chart_df[ma_col] = chart_df["close"].rolling(window=period, min_periods=period).mean()
+        ma_rows_map[str(period)] = [
+            {"time": row["time"], "value": float(row[ma_col])}
+            for _, row in chart_df.dropna(subset=[ma_col])[["time", ma_col]].iterrows()
+        ]
+
+    prev_close = chart_df["close"].shift(1)
+    tr_components = pd.concat(
+        [
+            chart_df["high"] - chart_df["low"],
+            (chart_df["high"] - prev_close).abs(),
+            (chart_df["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    )
+    chart_df["tr"] = tr_components.max(axis=1)
+    chart_df["atr"] = chart_df["tr"].ewm(alpha=1 / atr_period, adjust=False, min_periods=atr_period).mean()
+    chart_df["highest_high"] = chart_df["high"].rolling(window=chandelier_period, min_periods=chandelier_period).max()
+    chart_df["lowest_low"] = chart_df["low"].rolling(window=chandelier_period, min_periods=chandelier_period).min()
+    chart_df["chandelier_exit_long"] = chart_df["highest_high"] - (chart_df["atr"] * chandelier_mult)
+    chart_df["chandelier_exit_short"] = chart_df["lowest_low"] + (chart_df["atr"] * chandelier_mult)
+
+    chandelier_long_rows = [
+        {"time": row["time"], "value": float(row["chandelier_exit_long"])}
+        for _, row in chart_df.dropna(subset=["chandelier_exit_long"])[["time", "chandelier_exit_long"]].iterrows()
+    ]
+    chandelier_short_rows = [
+        {"time": row["time"], "value": float(row["chandelier_exit_short"])}
+        for _, row in chart_df.dropna(subset=["chandelier_exit_short"])[["time", "chandelier_exit_short"]].iterrows()
+    ]
+
+    data_json = json.dumps(chart_rows, ensure_ascii=False)
+    ma_rows_map_json = json.dumps(ma_rows_map, ensure_ascii=False)
+    ma_periods_json = json.dumps(ma_periods, ensure_ascii=False)
+    ma_color_map_json = json.dumps(
+        {
+            "5": "#EF4444",
+            "10": "#F97316",
+            "20": "#2563EB",
+            "60": "#16A34A",
+            "120": "#7C3AED",
+            "200": "#334155",
+        },
+        ensure_ascii=False,
+    )
+    chandelier_long_json = json.dumps(chandelier_long_rows, ensure_ascii=False)
+    chandelier_short_json = json.dumps(chandelier_short_rows, ensure_ascii=False)
+    title_json = json.dumps(f"{ticker} - Oracle OHLCV", ensure_ascii=False)
+    chandelier_long_title_json = json.dumps(f"CH Long({chandelier_period},{chandelier_mult:g})", ensure_ascii=False)
+    chandelier_short_title_json = json.dumps(f"CH Short({chandelier_period},{chandelier_mult:g})", ensure_ascii=False)
+    show_ch_long_json = json.dumps(show_ch_long)
+    show_ch_short_json = json.dumps(show_ch_short)
+
+    widget_html = f"""
         <div style="width:100%; border:1px solid #E5E7EB; border-radius:8px; overflow:hidden; background:#fff;">
             <div id="tv_lw_root" style="width:100%; aspect-ratio:6 / 4;"></div>
         </div>
@@ -402,14 +554,66 @@ def _render_tradingview_widget(
             }})();
         </script>
         """
-        components.html(widget_html, height=900)
+    components.html(widget_html, height=900)
 
 
-def main() -> None:
-    st.set_page_config(page_title="Oracle Price Viewer", layout="wide")
+def _render_table_tab(table_name: str) -> None:
+    config = _get_table_config(table_name)
 
-    st.title("Oracle Stock Viewer")
-    st.caption("All data is queried from Oracle DB (STOCK_MASTER, DAILY_PRICE).")
+    st.subheader(f"{table_name}")
+    st.caption(config["description"])
+
+    try:
+        stats = get_table_stats(table_name)
+    except Exception as exc:
+        st.error(f"Failed to query table stats from Oracle DB: {exc}")
+        return
+
+    metric_columns = st.columns(3)
+    metric_columns[0].metric("Rows", f"{stats['row_count']:,}")
+    metric_columns[1].metric("Latest Date", str(stats.get("max_date") or "-"))
+    metric_columns[2].metric("Earliest Date", str(stats.get("min_date") or "-"))
+
+    with st.expander("컬럼 정보 보기"):
+        try:
+            schema_df = get_table_schema(table_name)
+            st.dataframe(schema_df, width="stretch", hide_index=True)
+        except Exception as exc:
+            st.error(f"Failed to query schema from Oracle DB: {exc}")
+
+    control_col1, control_col2 = st.columns([2, 1])
+    with control_col1:
+        keyword = st.text_input(
+            "검색 키워드",
+            key=f"keyword_{table_name}",
+            placeholder="티커, 종목명, 업종코드 등",
+        )
+    with control_col2:
+        limit = st.number_input(
+            "미리보기 행 수",
+            min_value=10,
+            max_value=1000,
+            value=100,
+            step=10,
+            key=f"limit_{table_name}",
+        )
+
+    try:
+        preview_df = load_table_preview(table_name, limit=int(limit), keyword=keyword)
+    except Exception as exc:
+        st.error(f"Failed to query table rows from Oracle DB: {exc}")
+        return
+
+    if preview_df.empty:
+        st.info("조건에 맞는 데이터가 없습니다.")
+        return
+
+    st.dataframe(preview_df, width="stretch", hide_index=True)
+
+
+def _render_chart_tab() -> None:
+    st.subheader("개별 종목 차트")
+    st.caption("Oracle DB의 STOCK_MASTER와 DAILY_PRICE를 사용해 종목 차트를 조회합니다.")
 
     keyword = st.text_input("Search by ticker or stock name", placeholder="ex) 005930 or Samsung")
 
@@ -482,7 +686,6 @@ def main() -> None:
     selected_chart_style_label = st.radio("Chart Style", list(chart_style_options.keys()), horizontal=True, index=0)
     selected_chart_style = chart_style_options[selected_chart_style_label]
 
-    st.subheader(f"TradingView Chart ({selected_ticker})")
     st.caption("TradingView Lightweight Charts로 Oracle DB 조회 OHLCV만 렌더링합니다.")
     _render_tradingview_widget(
         selected_ticker,
@@ -496,6 +699,23 @@ def main() -> None:
         show_ch_long=show_ch_long,
         show_ch_short=show_ch_short,
     )
+
+
+def main() -> None:
+    st.set_page_config(page_title="Oracle Price Viewer", layout="wide")
+
+    st.title("Oracle Stock Viewer")
+    st.caption("Oracle DB 테이블별로 기능을 선택할 수 있습니다. 차트 조회와 테이블 브라우저를 탭으로 분리했습니다.")
+
+    tab_labels = ["개별 종목 차트"] + [config["name"] for config in TABLE_CONFIGS]
+    tabs = st.tabs(tab_labels)
+
+    with tabs[0]:
+        _render_chart_tab()
+
+    for index, config in enumerate(TABLE_CONFIGS, start=1):
+        with tabs[index]:
+            _render_table_tab(config["name"])
 
 
 if __name__ == "__main__":

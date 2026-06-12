@@ -13,7 +13,7 @@ pip install -r requirements.txt
 프로젝트 루트에서 Oracle DB 데이터를 조회하는 Streamlit 앱을 실행할 수 있습니다.
 
 - 앱 파일: `streamlit_app.py`
-- 조회 대상 테이블: `STOCK_MASTER`, `DAILY_PRICE`
+- 조회 대상 테이블: `STOCK_MASTER`, `DAILY_PRICE`, `STOCK_DIVIDEND`, `ETF_COMPONENT`, `STOCK_INDUSTRY`
 
 필수 환경 변수:
 - `OCI_DB_USER`
@@ -27,20 +27,16 @@ pip install -r requirements.txt
 ```
 
 제공 기능:
-- 티커/종목명 검색
-- 티커 선택 시 TradingView 차트 표시
-- 일봉/주봉/월봉 토글 가능
-- 캔들 / 바(시고저종) 토글 가능
-- 이동평균선 선택 표시(5, 10, 20, 60, 120, 200 / 기본 20)
-- 샹들리에 Exit 라인 표시(기본 22, ATR x 2)
-- 샹들리에/ATR 파라미터 조절 옵션 제공(CH Period, ATR Period, ATR Mult)
-- 샹들리에 라인 표시 선택 제공(Long, Short)
-- 기본 조회 기간은 최근 5년입니다.
-- 차트는 기본적으로 최근 1년만 보이도록 열리고, 확대/스크롤로 5년치 데이터를 볼 수 있습니다.
+- 탭 기반 UI로 기능을 분리해 `개별 종목 차트`와 테이블별 조회 화면을 선택할 수 있습니다.
+- `개별 종목 차트` 탭에서 티커/종목명 검색, 종목 선택, TradingView 차트 조회가 가능합니다.
+- 차트 탭에서 일봉/주봉/월봉, 캔들/바(시고저종), 이동평균선, 샹들리에 Exit 옵션을 조절할 수 있습니다.
+- 차트 기본 조회 기간은 최근 5년이며, 초기 화면은 최근 1년 구간으로 열립니다.
+- 각 테이블 탭에서 Oracle 테이블 row 수, 기준 날짜 범위, 컬럼 스키마를 확인할 수 있습니다.
+- 각 테이블 탭에서 키워드 검색과 미리보기 행 수 조절로 데이터를 탐색할 수 있습니다.
 
 참고:
-- TradingView Lightweight Charts Library로 렌더링합니다.
 - 차트 데이터는 Oracle DB(`DAILY_PRICE`) 조회 결과만 사용합니다.
+- 테이블 조회는 Oracle DB에서 직접 읽어오며, 앱 내부 화이트리스트에 등록된 테이블만 노출합니다.
 
 ## 데이터 명세 문서
 
