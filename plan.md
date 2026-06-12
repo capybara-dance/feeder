@@ -458,6 +458,26 @@
 ### Commands used for verification
 - `/workspaces/feeder/.venv/bin/python -m py_compile streamlit_app.py`
 
+## 29) release full workflow dividend 제외 수정 (2026-06-12)
+
+### Completed
+- `.github/workflows/sync_oracle_release_full.yml` 기본 실행 인자에 `--tables industry,master,price`를 추가했다.
+- `source=release`에서 미지원인 `STOCK_DIVIDEND`가 기본 대상에 포함되어 실패하던 문제를 제거했다.
+
+### In progress
+- 없음.
+
+### Next 3 concrete tasks
+1. GitHub Actions에서 `Sync Oracle Release Full 10Y`를 다시 실행해 정상 완료를 확인한다.
+2. 필요 시 workflow 입력에 `tables` 옵션을 노출해 운영자가 대상 테이블을 선택할 수 있게 한다.
+3. release 계열 workflow 문서(README) 설명을 현재 동작과 일치하도록 점검한다.
+
+### Risks / blockers
+- 릴리즈 자산 스키마가 변경되면 적재 단계에서 별도 파싱 오류가 발생할 수 있다.
+
+### Commands used for verification
+- `command -v actionlint >/dev/null 2>&1 && actionlint .github/workflows/sync_oracle_release_full.yml || true; git diff --check`
+
 ## 27) DAILY_PRICE RS 5컬럼 반영 + release daily 연동 (2026-06-12)
 
 ### Completed
