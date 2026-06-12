@@ -1,27 +1,12 @@
-name: Sync Oracle (Manual)
+name: Sync Stock Dividend
 
 on:
   workflow_dispatch:
     inputs:
-      run_mode:
-        description: Run mode (daily/full-10y/range)
-        required: false
-        default: daily
-        type: string
       lookback_days:
-        description: Daily mode lookback window for missing business days
+        description: Lookback window for missing business days
         required: false
         default: "10"
-        type: string
-      start_date:
-        description: Range mode start date (YYYY-MM-DD)
-        required: false
-        default: ""
-        type: string
-      end_date:
-        description: Range mode end date (YYYY-MM-DD)
-        required: false
-        default: ""
         type: string
       test_limit:
         description: Optional ticker limit (0 = all)
@@ -43,24 +28,18 @@ on:
         required: false
         default: ""
         type: string
-      tables:
-        description: Target tables (all,industry,master,price,dividend)
-        required: false
-        default: all
-        type: string
       dry_run:
         description: Collect only, skip DB upsert
         required: false
         default: false
         type: boolean
-      collect_dividends:
-        description: Collect dividends (disable to speed up run)
-        required: false
-        default: true
-        type: boolean
+
+  # Every Sunday 03:30 KST (18:30 UTC Saturday)
+  schedule:
+    - cron: "30 18 * * 6"
 
 jobs:
-  sync-oracle:
+  sync-stock-dividend:
     runs-on: ubuntu-latest
     env:
       OCI_DB_USER: ${{ secrets.OCI_DB_USER }}
@@ -90,34 +69,29 @@ jobs:
         id: args
         shell: bash
         run: |
-          ARGS="--mode daily --lookback-days 10 --test-limit 0 --max-workers 8 --batch-size 2000"
+          ARGS="--lookback-days 10 --test-limit 0 --max-workers 8 --batch-size 2000"
 
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            if [[ -n "${{ inputs.run_mode }}" ]]; then ARGS+=" --mode ${{ inputs.run_mode }}"; fi
             if [[ -n "${{ inputs.lookback_days }}" ]]; then ARGS+=" --lookback-days ${{ inputs.lookback_days }}"; fi
-            if [[ -n "${{ inputs.start_date }}" ]]; then ARGS+=" --start-date ${{ inputs.start_date }}"; fi
-            if [[ -n "${{ inputs.end_date }}" ]]; then ARGS+=" --end-date ${{ inputs.end_date }}"; fi
             if [[ -n "${{ inputs.test_limit }}" ]]; then ARGS+=" --test-limit ${{ inputs.test_limit }}"; fi
             if [[ -n "${{ inputs.max_workers }}" ]]; then ARGS+=" --max-workers ${{ inputs.max_workers }}"; fi
             if [[ -n "${{ inputs.batch_size }}" ]]; then ARGS+=" --batch-size ${{ inputs.batch_size }}"; fi
             if [[ -n "${{ inputs.market }}" ]]; then ARGS+=" --market ${{ inputs.market }}"; fi
-            if [[ -n "${{ inputs.tables }}" ]]; then ARGS+=" --tables ${{ inputs.tables }}"; fi
             if [[ "${{ inputs.dry_run }}" == "true" ]]; then ARGS+=" --dry-run"; fi
-            if [[ "${{ inputs.collect_dividends }}" == "false" ]]; then ARGS+=" --skip-dividends"; fi
           fi
 
           echo "args=${ARGS}" >> "${GITHUB_OUTPUT}"
 
-      - name: Run sync_oracle
+      - name: Run sync_table_stock_dividend
         shell: bash
         run: |
-          python scripts/sync_oracle.py ${{ steps.args.outputs.args }}
+          python scripts/sync_table_stock_dividend.py ${{ steps.args.outputs.args }}
 
       - name: Upload sync report artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sync-oracle-report-${{ github.run_id }}
+          name: sync-stock-dividend-report-${{ github.run_id }}
           path: reports/sync_oracle_report.html
           if-no-files-found: warn
           retention-days: 14
