@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -14,6 +15,48 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from .collect import CollectionResult, _build_industry_df, _build_master_df, _build_price_df
+
+
+logger = logging.getLogger(__name__)
+
+
+RS_COLUMN_ALIASES: dict[str, list[str]] = {
+    "RS_1M": ["RS_1M", "rs_1m", "RS1M", "MRS_1M", "mrs_1m", "RS 1M", "rs 1m"],
+    "RS_3M": ["RS_3M", "rs_3m", "RS3M", "MRS_3M", "mrs_3m", "RS 3M", "rs 3m"],
+    "RS_6M": ["RS_6M", "rs_6m", "RS6M", "MRS_6M", "mrs_6m", "RS 6M", "rs 6m"],
+    "RS_12M": ["RS_12M", "rs_12m", "RS12M", "MRS_12M", "mrs_12m", "RS 12M", "rs 12m"],
+    "RS_WEIGHTED": [
+        "RS_WEIGHTED",
+        "rs_weighted",
+        "WEIGHTED_RS",
+        "weighted_rs",
+        "Weighted RS",
+        "weighted rs",
+        "WeightedRS",
+    ],
+}
+
+
+def _compute_weighted_rs(df: pd.DataFrame) -> pd.Series:
+    # Weighted RS rule: 1m/3m/6m/12m with weights 4:3:2:1.
+    weights = {
+        "RS_1M": 4.0,
+        "RS_3M": 3.0,
+        "RS_6M": 2.0,
+        "RS_12M": 1.0,
+    }
+
+    weighted_sum = pd.Series(0.0, index=df.index, dtype="float64")
+    weight_sum = pd.Series(0.0, index=df.index, dtype="float64")
+    for col, weight in weights.items():
+        vals = pd.to_numeric(df[col], errors="coerce")
+        valid = vals.notna()
+        weighted_sum = weighted_sum + vals.fillna(0.0) * weight
+        weight_sum = weight_sum + valid.astype("float64") * weight
+
+    out = weighted_sum / weight_sum
+    out = out.where(weight_sum > 0)
+    return out
 
 
 @dataclass(frozen=True)
@@ -43,6 +86,28 @@ class ReleasePreparedData:
 
     def cleanup(self) -> None:
         shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+
+def _resolve_col_case_insensitive(columns: list[str] | set[str], aliases: list[str]) -> str | None:
+    by_lower = {str(c).strip().lower(): str(c) for c in columns}
+    for alias in aliases:
+        col = by_lower.get(alias.strip().lower())
+        if col:
+            return col
+    return None
+
+
+def _attach_release_rs_columns(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    out = frame.copy()
+    missing: list[str] = []
+    for target, aliases in RS_COLUMN_ALIASES.items():
+        source_col = _resolve_col_case_insensitive(list(out.columns), aliases)
+        if source_col is None:
+            out[target] = pd.NA
+            missing.append(target)
+            continue
+        out[target] = pd.to_numeric(out[source_col], errors="coerce")
+    return out, missing
 
 
 def _api_json(url: str, *, token: str | None = None) -> dict[str, Any]:
@@ -151,11 +216,44 @@ def _feature_to_std_df(feature_df: pd.DataFrame) -> pd.DataFrame:
     if "MarketCap" not in out.columns:
         out["MarketCap"] = pd.NA
 
-    out = out[["Date", "Ticker", "Open", "High", "Low", "Close", "Volume", "MarketCap"]].copy()
+    out, missing_rs = _attach_release_rs_columns(out)
+    if missing_rs:
+        logger.warning("Release parquet missing RS columns; fill NULL: %s", ", ".join(missing_rs))
+
+    out = out[
+        [
+            "Date",
+            "Ticker",
+            "Open",
+            "High",
+            "Low",
+            "Close",
+            "Volume",
+            "MarketCap",
+            "RS_1M",
+            "RS_3M",
+            "RS_6M",
+            "RS_12M",
+            "RS_WEIGHTED",
+        ]
+    ].copy()
     out["Date"] = pd.to_datetime(out["Date"], errors="coerce").dt.normalize()
     out["Ticker"] = out["Ticker"].astype(str).str.zfill(6)
-    for c in ["Open", "High", "Low", "Close", "Volume", "MarketCap"]:
+    for c in [
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume",
+        "MarketCap",
+        "RS_1M",
+        "RS_3M",
+        "RS_6M",
+        "RS_12M",
+        "RS_WEIGHTED",
+    ]:
         out[c] = pd.to_numeric(out[c], errors="coerce")
+    out["RS_WEIGHTED"] = _compute_weighted_rs(out)
     out = out.dropna(subset=["Date", "Ticker", "Close"]).reset_index(drop=True)
     return out
 
@@ -289,6 +387,19 @@ def iter_release_price_batches(
     if "MarketCap" in schema_cols:
         read_cols.append("MarketCap")
 
+    rs_source_cols: dict[str, str | None] = {}
+    missing_rs_cols: list[str] = []
+    for target, aliases in RS_COLUMN_ALIASES.items():
+        src = _resolve_col_case_insensitive(schema_cols, aliases)
+        rs_source_cols[target] = src
+        if src is None:
+            missing_rs_cols.append(target)
+        elif src not in read_cols:
+            read_cols.append(src)
+
+    if missing_rs_cols:
+        logger.warning("Release parquet missing RS columns; fill NULL: %s", ", ".join(missing_rs_cols))
+
     start_ts = pd.to_datetime(start_date, errors="coerce") if start_date else None
     end_ts = pd.to_datetime(end_date, errors="coerce") if end_date else None
 
@@ -296,6 +407,12 @@ def iter_release_price_batches(
         df = rb.to_pandas()
         if "MarketCap" not in df.columns:
             df["MarketCap"] = pd.NA
+
+        for target, source in rs_source_cols.items():
+            if source is None or source not in df.columns:
+                df[target] = pd.NA
+            else:
+                df[target] = pd.to_numeric(df[source], errors="coerce")
 
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.normalize()
         if start_ts is not None:
@@ -306,8 +423,21 @@ def iter_release_price_batches(
             continue
 
         df["Ticker"] = df["Ticker"].apply(_normalize_ticker)
-        for c in ["Open", "High", "Low", "Close", "Volume", "MarketCap"]:
+        for c in [
+            "Open",
+            "High",
+            "Low",
+            "Close",
+            "Volume",
+            "MarketCap",
+            "RS_1M",
+            "RS_3M",
+            "RS_6M",
+            "RS_12M",
+            "RS_WEIGHTED",
+        ]:
             df[c] = pd.to_numeric(df[c], errors="coerce")
+        df["RS_WEIGHTED"] = _compute_weighted_rs(df)
 
         df = df.dropna(subset=["Date", "Ticker", "Close"]).reset_index(drop=True)
         if df.empty:
@@ -350,6 +480,11 @@ def iter_release_price_batches(
                 "ADJ_CLOSE",
                 "VOLUME",
                 "MARKET_CAP",
+                "RS_1M",
+                "RS_3M",
+                "RS_6M",
+                "RS_12M",
+                "RS_WEIGHTED",
             ]
         ]
 

@@ -122,7 +122,22 @@ def _build_samples_section(result) -> str:
         master_sample["IS_LISTED"] = _to_listed_label(master_sample.get("IS_LISTED"))
     price_sample = _row_to_dict(
         price_row,
-        ["TICKER", "PRICE_DATE", "OPEN_PRICE", "HIGH_PRICE", "LOW_PRICE", "CLOSE_PRICE", "ADJ_CLOSE", "VOLUME", "MARKET_CAP"],
+        [
+            "TICKER",
+            "PRICE_DATE",
+            "OPEN_PRICE",
+            "HIGH_PRICE",
+            "LOW_PRICE",
+            "CLOSE_PRICE",
+            "ADJ_CLOSE",
+            "VOLUME",
+            "MARKET_CAP",
+            "RS_1M",
+            "RS_3M",
+            "RS_6M",
+            "RS_12M",
+            "RS_WEIGHTED",
+        ],
     ) if hasattr(price_row, "get") else {}
 
     quality = {k: _normalize_value(v) for k, v in (result.quality_metrics or {}).items()}

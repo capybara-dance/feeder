@@ -4,30 +4,30 @@ on:
   workflow_dispatch:
     inputs:
       lookback_days:
-        description: Lookback window for missing business days
+        description: Lookback window in days (latest release, recent range)
         required: false
         default: "10"
         type: string
-      test_limit:
-        description: Optional ticker limit (0 = all)
+      release_repo:
+        description: GitHub release repo (owner/name)
         required: false
-        default: "0"
+        default: capybara-dance/capybara_fetcher
         type: string
-      max_workers:
-        description: Parallel workers
+      release_tag:
+        description: Optional release tag (empty = latest)
         required: false
-        default: "8"
+        default: ""
         type: string
       batch_size:
         description: Oracle executemany batch size
         required: false
         default: "2000"
         type: string
-      market:
-        description: Optional market filter (KOSPI/KOSDAQ/ETF)
+      no_progress:
+        description: Disable progress bar and use plain logs
         required: false
-        default: ""
-        type: string
+        default: false
+        type: boolean
       dry_run:
         description: Collect only, skip DB upsert
         required: false
@@ -70,23 +70,23 @@ jobs:
         id: args
         shell: bash
         run: |
-          ARGS="--lookback-days 10 --test-limit 0 --max-workers 8 --batch-size 2000"
+          ARGS="--lookback-days 10 --batch-size 2000 --release-repo capybara-dance/capybara_fetcher"
 
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             if [[ -n "${{ inputs.lookback_days }}" ]]; then ARGS+=" --lookback-days ${{ inputs.lookback_days }}"; fi
-            if [[ -n "${{ inputs.test_limit }}" ]]; then ARGS+=" --test-limit ${{ inputs.test_limit }}"; fi
-            if [[ -n "${{ inputs.max_workers }}" ]]; then ARGS+=" --max-workers ${{ inputs.max_workers }}"; fi
+            if [[ -n "${{ inputs.release_repo }}" ]]; then ARGS+=" --release-repo ${{ inputs.release_repo }}"; fi
+            if [[ -n "${{ inputs.release_tag }}" ]]; then ARGS+=" --release-tag ${{ inputs.release_tag }}"; fi
             if [[ -n "${{ inputs.batch_size }}" ]]; then ARGS+=" --batch-size ${{ inputs.batch_size }}"; fi
-            if [[ -n "${{ inputs.market }}" ]]; then ARGS+=" --market ${{ inputs.market }}"; fi
+            if [[ "${{ inputs.no_progress }}" == "true" ]]; then ARGS+=" --no-progress"; fi
             if [[ "${{ inputs.dry_run }}" == "true" ]]; then ARGS+=" --dry-run"; fi
           fi
 
           echo "args=${ARGS}" >> "${GITHUB_OUTPUT}"
 
-      - name: Run sync_daily_price_recent
+      - name: Run sync_daily_price_release
         shell: bash
         run: |
-          python scripts/sync_daily_price_recent.py ${{ steps.args.outputs.args }}
+          python scripts/sync_daily_price_release.py ${{ steps.args.outputs.args }}
 
       - name: Upload sync report artifact
         if: always()

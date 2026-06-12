@@ -19,6 +19,8 @@ from scripts.dotenv_loader import load_dotenv_if_present
 REPO_ROOT = Path(__file__).resolve().parent
 load_dotenv_if_present(REPO_ROOT / ".env")
 
+RS_COLUMNS = ["RS_1M", "RS_3M", "RS_6M", "RS_12M", "RS_WEIGHTED"]
+
 
 def _run_via_streamlit() -> None:
     sys.argv = ["streamlit", "run", str(Path(__file__).resolve()), *sys.argv[1:]]
@@ -41,7 +43,7 @@ TABLE_CONFIGS: list[dict[str, Any]] = [
     {
         "name": "DAILY_PRICE",
         "label": "일별 시세",
-        "description": "Oracle DB에 적재된 일봉 OHLCV와 시가총액 데이터를 최신순으로 조회합니다.",
+        "description": "Oracle DB에 적재된 일봉 OHLCV, 시가총액, RS 데이터를 최신순으로 조회합니다.",
         "search_columns": ["TICKER"],
         "order_by": "PRICE_DATE DESC, TICKER",
         "date_column": "PRICE_DATE",
@@ -252,7 +254,12 @@ def load_price_history(ticker: str, years: int = 5) -> pd.DataFrame:
                     HIGH_PRICE,
                     LOW_PRICE,
                     CLOSE_PRICE,
-                    VOLUME
+                                        VOLUME,
+                                        RS_1M,
+                                        RS_3M,
+                                        RS_6M,
+                                        RS_12M,
+                                        RS_WEIGHTED
                 FROM DAILY_PRICE
                 WHERE TICKER = :ticker
                   AND PRICE_DATE >= :start_date
@@ -265,12 +272,27 @@ def load_price_history(ticker: str, years: int = 5) -> pd.DataFrame:
             )
             rows = cur.fetchall()
 
-    price_df = pd.DataFrame(rows, columns=["PRICE_DATE", "OPEN_PRICE", "HIGH_PRICE", "LOW_PRICE", "CLOSE_PRICE", "VOLUME"])
+    price_df = pd.DataFrame(
+        rows,
+        columns=[
+            "PRICE_DATE",
+            "OPEN_PRICE",
+            "HIGH_PRICE",
+            "LOW_PRICE",
+            "CLOSE_PRICE",
+            "VOLUME",
+            "RS_1M",
+            "RS_3M",
+            "RS_6M",
+            "RS_12M",
+            "RS_WEIGHTED",
+        ],
+    )
     if price_df.empty:
         return price_df
 
     price_df["PRICE_DATE"] = pd.to_datetime(price_df["PRICE_DATE"])
-    for col in ["OPEN_PRICE", "HIGH_PRICE", "LOW_PRICE", "CLOSE_PRICE", "VOLUME"]:
+    for col in ["OPEN_PRICE", "HIGH_PRICE", "LOW_PRICE", "CLOSE_PRICE", "VOLUME", *RS_COLUMNS]:
         price_df[col] = pd.to_numeric(price_df[col], errors="coerce")
 
     return price_df
@@ -292,18 +314,23 @@ def _resample_price_history(price_df: pd.DataFrame, interval: str) -> pd.DataFra
     if freq is None:
         return price_df.copy()
 
+    agg_map: dict[str, tuple[str, str]] = {
+        "OPEN_PRICE": ("OPEN_PRICE", "first"),
+        "HIGH_PRICE": ("HIGH_PRICE", "max"),
+        "LOW_PRICE": ("LOW_PRICE", "min"),
+        "CLOSE_PRICE": ("CLOSE_PRICE", "last"),
+        "VOLUME": ("VOLUME", "sum"),
+    }
+    for col in RS_COLUMNS:
+        if col in price_df.columns:
+            agg_map[col] = (col, "last")
+
     resampled = (
         price_df.copy()
         .sort_values("PRICE_DATE")
         .set_index("PRICE_DATE")
         .resample(freq)
-        .agg(
-            OPEN_PRICE=("OPEN_PRICE", "first"),
-            HIGH_PRICE=("HIGH_PRICE", "max"),
-            LOW_PRICE=("LOW_PRICE", "min"),
-            CLOSE_PRICE=("CLOSE_PRICE", "last"),
-            VOLUME=("VOLUME", "sum"),
-        )
+        .agg(**agg_map)
         .dropna(subset=["OPEN_PRICE", "HIGH_PRICE", "LOW_PRICE", "CLOSE_PRICE"])
         .reset_index()
     )
@@ -321,6 +348,7 @@ def _render_tradingview_widget(
     ma_periods: list[int],
     show_ch_long: bool,
     show_ch_short: bool,
+    rs_column: str | None,
 ) -> None:
     chart_df_raw = _resample_price_history(price_df, interval)
 
@@ -344,6 +372,16 @@ def _render_tradingview_widget(
     if not chart_rows:
         st.warning("차트 렌더링에 사용할 OHLC 데이터가 없습니다.")
         return
+
+    rs_rows: list[dict[str, float | str]] = []
+    if rs_column and rs_column in chart_df_raw.columns:
+        for row in chart_df_raw[["PRICE_DATE", rs_column]].dropna(subset=[rs_column]).itertuples(index=False):
+            rs_rows.append(
+                {
+                    "time": pd.Timestamp(row.PRICE_DATE).strftime("%Y-%m-%d"),
+                    "value": float(getattr(row, rs_column)),
+                }
+            )
 
     chart_df = pd.DataFrame(chart_rows)
     latest_price_date = pd.to_datetime(chart_df["time"]).max()
@@ -404,6 +442,8 @@ def _render_tradingview_widget(
     chandelier_short_title_json = json.dumps(f"CH Short({chandelier_period},{chandelier_mult:g})", ensure_ascii=False)
     show_ch_long_json = json.dumps(show_ch_long)
     show_ch_short_json = json.dumps(show_ch_short)
+    rs_rows_json = json.dumps(rs_rows, ensure_ascii=False)
+    rs_label_json = json.dumps(rs_column or "", ensure_ascii=False)
 
     widget_html = f"""
         <div style="width:100%; border:1px solid #E5E7EB; border-radius:8px; overflow:hidden; background:#fff;">
@@ -426,6 +466,8 @@ def _render_tradingview_widget(
                 const chandelierShortTitle = {chandelier_short_title_json};
                 const showChLong = {show_ch_long_json};
                 const showChShort = {show_ch_short_json};
+                const rsRows = {rs_rows_json};
+                const rsLabel = {rs_label_json};
                 const candleData = data.map((d) => ({{
                     time: d.time,
                     open: Number(d.open),
@@ -515,6 +557,24 @@ def _render_tradingview_widget(
                         title: chandelierShortTitle,
                     }});
                     chandelierShortSeries.setData(chandelierShort);
+                }}
+
+                if (rsRows.length > 0) {{
+                    const rsSeries = chart.addLineSeries({{
+                        color: "#B45309",
+                        lineWidth: 2,
+                        lineStyle: 0,
+                        priceLineVisible: false,
+                        lastValueVisible: true,
+                        title: rsLabel,
+                        priceScaleId: "left",
+                    }});
+                    rsSeries.setData(rsRows);
+                    chart.priceScale("left").applyOptions({{
+                        visible: true,
+                        borderColor: "#E5E7EB",
+                        scaleMargins: {{ top: 0.05, bottom: 0.82 }},
+                    }});
                 }}
 
                 const volumeSeries = chart.addHistogramSeries({{
@@ -674,6 +734,19 @@ def _render_chart_tab() -> None:
         default=[20],
     )
 
+    rs_options = {
+        "표시 안함": None,
+        "RS 1M": "RS_1M",
+        "RS 3M": "RS_3M",
+        "RS 6M": "RS_6M",
+        "RS 12M": "RS_12M",
+        "Weighted RS": "RS_WEIGHTED",
+    }
+    rs_label = st.selectbox("RS Line", options=list(rs_options.keys()), index=0)
+    selected_rs_column = rs_options[rs_label]
+    if selected_rs_column and selected_rs_column in price_df.columns and price_df[selected_rs_column].notna().sum() == 0:
+        st.warning(f"선택한 RS 컬럼({selected_rs_column})은 값이 없어 라인을 표시할 수 없습니다.")
+
     ch_line_options = st.multiselect(
         "Chandelier Lines",
         options=["Long", "Short"],
@@ -698,6 +771,7 @@ def _render_chart_tab() -> None:
         ma_periods=[int(period) for period in ma_periods],
         show_ch_long=show_ch_long,
         show_ch_short=show_ch_short,
+        rs_column=selected_rs_column,
     )
 
 

@@ -14,6 +14,30 @@ from capybara_fetcher.standardize import standardize_market_cap, standardize_ohl
 
 logger = logging.getLogger(__name__)
 
+RS_COLUMNS = ["RS_1M", "RS_3M", "RS_6M", "RS_12M", "RS_WEIGHTED"]
+
+
+def _compute_weighted_rs(df: pd.DataFrame) -> pd.Series:
+    # Weighted RS rule: 1m/3m/6m/12m with weights 4:3:2:1.
+    weights = {
+        "RS_1M": 4.0,
+        "RS_3M": 3.0,
+        "RS_6M": 2.0,
+        "RS_12M": 1.0,
+    }
+
+    weighted_sum = pd.Series(0.0, index=df.index, dtype="float64")
+    weight_sum = pd.Series(0.0, index=df.index, dtype="float64")
+    for col, weight in weights.items():
+        vals = pd.to_numeric(df[col], errors="coerce")
+        valid = vals.notna()
+        weighted_sum = weighted_sum + vals.fillna(0.0) * weight
+        weight_sum = weight_sum + valid.astype("float64") * weight
+
+    out = weighted_sum / weight_sum
+    out = out.where(weight_sum > 0)
+    return out
+
 
 @dataclass(frozen=True)
 class CollectionConfig:
@@ -110,6 +134,12 @@ def _build_price_df(std_df: pd.DataFrame, *, master_raw: pd.DataFrame) -> tuple[
     ).copy()
     out["ADJ_CLOSE"] = out["CLOSE_PRICE"]
 
+    for col in RS_COLUMNS:
+        if col not in out.columns:
+            out[col] = pd.NA
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    out["RS_WEIGHTED"] = _compute_weighted_rs(out)
+
     out["MARKET_CAP"] = pd.to_numeric(out["MARKET_CAP"], errors="coerce")
     missing_before = int(out["MARKET_CAP"].isna().sum())
 
@@ -137,6 +167,11 @@ def _build_price_df(std_df: pd.DataFrame, *, master_raw: pd.DataFrame) -> tuple[
             "ADJ_CLOSE",
             "VOLUME",
             "MARKET_CAP",
+            "RS_1M",
+            "RS_3M",
+            "RS_6M",
+            "RS_12M",
+            "RS_WEIGHTED",
         ]
     ]
     out = out.dropna(subset=["TICKER", "PRICE_DATE", "CLOSE_PRICE"]).sort_values(["TICKER", "PRICE_DATE"]).reset_index(drop=True)
@@ -232,7 +267,23 @@ def collect_data(cfg: CollectionConfig) -> CollectionResult:
                 if snapshot is not None and snapshot > 0:
                     std["MarketCap"] = std["MarketCap"].fillna(snapshot)
         else:
-            std = pd.DataFrame(columns=["Date", "Ticker", "Open", "High", "Low", "Close", "Volume", "MarketCap"])
+            std = pd.DataFrame(
+                columns=[
+                    "Date",
+                    "Ticker",
+                    "Open",
+                    "High",
+                    "Low",
+                    "Close",
+                    "Volume",
+                    "MarketCap",
+                    "RS_1M",
+                    "RS_3M",
+                    "RS_6M",
+                    "RS_12M",
+                    "RS_WEIGHTED",
+                ]
+            )
         if cfg.collect_dividends:
             div_raw = provider.fetch_dividends(
                 ticker=ticker,
@@ -274,7 +325,21 @@ def collect_data(cfg: CollectionConfig) -> CollectionResult:
                     dividend_frames.append(div_one)
 
     price_std = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(
-        columns=["Date", "Ticker", "Open", "High", "Low", "Close", "Volume", "MarketCap"]
+        columns=[
+            "Date",
+            "Ticker",
+            "Open",
+            "High",
+            "Low",
+            "Close",
+            "Volume",
+            "MarketCap",
+            "RS_1M",
+            "RS_3M",
+            "RS_6M",
+            "RS_12M",
+            "RS_WEIGHTED",
+        ]
     )
 
     industry_df = _build_industry_df(master_raw)

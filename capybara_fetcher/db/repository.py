@@ -10,6 +10,7 @@ import pandas as pd
 from .oracle_client import OracleClient
 from .sql_templates import (
     DAILY_PRICE_MERGE,
+    DAILY_PRICE_RS_ONLY_MERGE,
     STOCK_DIVIDEND_MERGE,
     STOCK_INDUSTRY_MERGE,
     STOCK_MASTER_MERGE,
@@ -129,6 +130,11 @@ class OracleRepository:
             "ADJ_CLOSE",
             "VOLUME",
             "MARKET_CAP",
+            "RS_1M",
+            "RS_3M",
+            "RS_6M",
+            "RS_12M",
+            "RS_WEIGHTED",
         ]
         scoped = price_df[cols]
         total_chunks = self._chunk_total(len(scoped), chunk_rows)
@@ -146,11 +152,52 @@ class OracleRepository:
                         "ADJ_CLOSE": self._to_float(rec["ADJ_CLOSE"]),
                         "VOLUME": self._to_int(rec["VOLUME"]),
                         "MARKET_CAP": self._to_float(rec["MARKET_CAP"]),
+                        "RS_1M": self._to_float(rec["RS_1M"]),
+                        "RS_3M": self._to_float(rec["RS_3M"]),
+                        "RS_6M": self._to_float(rec["RS_6M"]),
+                        "RS_12M": self._to_float(rec["RS_12M"]),
+                        "RS_WEIGHTED": self._to_float(rec["RS_WEIGHTED"]),
                     }
                 )
             total += self._client.execute_many(DAILY_PRICE_MERGE, rows)
             if total_chunks <= 10 or idx % 10 == 0 or idx == total_chunks:
                 logger.info("DAILY_PRICE upsert progress: chunk %s/%s rows=%s", idx, total_chunks, total)
+        return total
+
+    def upsert_daily_price_rs(self, price_df: pd.DataFrame) -> int:
+        if price_df is None or price_df.empty:
+            return 0
+
+        total = 0
+        chunk_rows = 50000
+        cols = [
+            "TICKER",
+            "PRICE_DATE",
+            "RS_1M",
+            "RS_3M",
+            "RS_6M",
+            "RS_12M",
+            "RS_WEIGHTED",
+        ]
+        scoped = price_df[cols]
+        total_chunks = self._chunk_total(len(scoped), chunk_rows)
+        for idx, chunk in enumerate(self._df_chunks(scoped, chunk_rows=chunk_rows), start=1):
+            rows: list[dict[str, Any]] = []
+            for rec in chunk.to_dict(orient="records"):
+                rows.append(
+                    {
+                        "TICKER": str(rec["TICKER"]).zfill(6),
+                        "PRICE_DATE": self._to_datetime(rec["PRICE_DATE"]),
+                        "RS_1M": self._to_float(rec["RS_1M"]),
+                        "RS_3M": self._to_float(rec["RS_3M"]),
+                        "RS_6M": self._to_float(rec["RS_6M"]),
+                        "RS_12M": self._to_float(rec["RS_12M"]),
+                        "RS_WEIGHTED": self._to_float(rec["RS_WEIGHTED"]),
+                    }
+                )
+            total += self._client.execute_many(DAILY_PRICE_RS_ONLY_MERGE, rows)
+            if total_chunks <= 10 or idx % 10 == 0 or idx == total_chunks:
+                logger.info("DAILY_PRICE RS-only upsert progress: chunk %s/%s rows=%s", idx, total_chunks, total)
         return total
 
     def upsert_stock_dividend(self, dividend_df: pd.DataFrame) -> int:

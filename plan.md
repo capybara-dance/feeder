@@ -458,6 +458,76 @@
 ### Commands used for verification
 - `/workspaces/feeder/.venv/bin/python -m py_compile streamlit_app.py`
 
+## 27) DAILY_PRICE RS 5컬럼 반영 + release daily 연동 (2026-06-12)
+
+### Completed
+- `DAILY_PRICE` 계약에 RS 컬럼 5개(`RS_1M`, `RS_3M`, `RS_6M`, `RS_12M`, `RS_WEIGHTED`)를 추가했다.
+  - DDL 기준 타입: `NUMBER(6,2)`, NULL 허용
+  - 반영 파일: `db.txt`, `docs/data_dictionary.md`
+- DB upsert 경로를 RS 컬럼까지 포함하도록 확장했다.
+  - `capybara_fetcher/db/sql_templates.py`의 `DAILY_PRICE_MERGE`에 bind/update/insert 추가
+  - `capybara_fetcher/db/repository.py` `upsert_daily_price` row 매핑 확장
+- 수집 경로(collect/release) 모두 RS 컬럼 스키마를 유지하도록 정리했다.
+  - `capybara_fetcher/pipeline/collect.py`: RS 컬럼 보장(없으면 NA)
+  - `capybara_fetcher/pipeline/release_ingest.py`: release parquet RS alias 매핑 + 누락 시 warning 후 NULL 적재
+- release daily 실행 경로를 최신 릴리즈 기준 최근 10일 동기화로 정렬했다.
+  - `scripts/sync_daily_price_release.py`: `--source release --mode range` 래퍼로 변경, 기본 lookback 10일
+  - `.github/workflows/sync_daily_price_release.yml`: daily 21:00 KST 스케줄 유지 + `sync_daily_price_release.py` 실행으로 수정
+- Streamlit 차트 탭에서 RS 표시를 추가했다.
+  - `streamlit_app.py` `load_price_history`에 RS 컬럼 조회 추가
+  - 차트 옵션에 RS 토글(표시 안함/1M/3M/6M/12M/Weighted) 추가
+  - 선택한 RS 1개 라인만 렌더링하며 NULL 구간은 단절, 값 전부 NULL이면 경고 노출
+- 운영 리포트/샘플 생성 경로를 RS 컬럼 포함으로 갱신했다.
+  - `scripts/run_collection_report.py`, `scripts/update_data_dictionary_samples.py`
+- 릴리즈 ingest 테스트를 보강했다.
+  - `tests/test_release_ingest.py`에 RS alias 매핑/RS 누락 NULL fallback 케이스 추가
+
+### In progress
+- 없음.
+
+### Next 3 concrete tasks
+1. 운영 Oracle DB에 `ALTER TABLE DAILY_PRICE ADD (...)`를 적용해 신규 RS 컬럼을 실제 생성한다.
+2. GitHub Actions `sync_daily_price_release.yml` 1회 수동 실행으로 최근 10일 RS 적재를 검증한다.
+3. Streamlit 실환경에서 RS 토글 라인 시각화를 수동 점검한다.
+
+### Risks / blockers
+- 실제 Oracle DB에 RS 컬럼 DDL이 선반영되지 않으면 upsert 시 컬럼 미존재 오류가 발생한다.
+- 릴리즈 자산에서 RS 컬럼 명칭이 추가로 변형된 경우 alias 목록 확장이 필요할 수 있다.
+
+### Commands used for verification
+- `/workspaces/feeder/.venv/bin/python -m py_compile capybara_fetcher/pipeline/collect.py capybara_fetcher/pipeline/release_ingest.py capybara_fetcher/db/sql_templates.py capybara_fetcher/db/repository.py scripts/sync_daily_price_release.py streamlit_app.py scripts/run_collection_report.py scripts/update_data_dictionary_samples.py`
+- `/workspaces/feeder/.venv/bin/python -m pytest -q tests/test_release_ingest.py tests/test_sync_oracle.py`
+- `command -v actionlint >/dev/null 2>&1 && actionlint .github/workflows/sync_daily_price_release.yml .github/workflows/sync_daily_price_recent.yml || true; git diff --check`
+
+## 28) Weighted RS 계산식 반영 + RS-only 갱신 경로 추가 (2026-06-12)
+
+### Completed
+- `RS_WEIGHTED`를 `(RS_1M*4 + RS_3M*3 + RS_6M*2 + RS_12M*1) / 10` 공식으로 계산하도록 반영했다.
+  - `capybara_fetcher/pipeline/collect.py`
+  - `capybara_fetcher/pipeline/release_ingest.py`
+- `tests/test_release_ingest.py`에 가중치 공식 검증 케이스를 반영했다.
+- `DAILY_PRICE`의 RS 컬럼만 갱신하는 전용 경로를 추가했다.
+  - SQL: `DAILY_PRICE_RS_ONLY_MERGE` (`capybara_fetcher/db/sql_templates.py`)
+  - Repository: `upsert_daily_price_rs` (`capybara_fetcher/db/repository.py`)
+  - 실행 스크립트: `scripts/sync_daily_price_release_rs_only.py`
+- RS-only 실운영 실행을 수행해 최근 10일 기준 26,025행 업데이트를 완료했다.
+
+### In progress
+- 없음.
+
+### Next 3 concrete tasks
+1. 필요 시 `sync_daily_price_release.yml`에 RS-only 수동 트리거 옵션을 추가해 운영 편의성을 높인다.
+2. release 자산에 `RS_WEIGHTED` 원본 컬럼이 생겨도 계산식 우선 정책을 유지할지 운영 규칙을 고정한다.
+3. RS-only 경로 실행 결과(업데이트 행 수, NULL 비율)를 리포트에 표준 지표로 노출한다.
+
+### Risks / blockers
+- release 자산의 RS 컬럼 명이 추가로 바뀌면 alias 매핑 확장이 필요하다.
+
+### Commands used for verification
+- `/workspaces/feeder/.venv/bin/python -m py_compile capybara_fetcher/pipeline/collect.py capybara_fetcher/pipeline/release_ingest.py tests/test_release_ingest.py capybara_fetcher/db/sql_templates.py capybara_fetcher/db/repository.py scripts/sync_daily_price_release_rs_only.py`
+- `/workspaces/feeder/.venv/bin/python -m pytest -q tests/test_release_ingest.py tests/test_sync_oracle.py`
+- `/workspaces/feeder/.venv/bin/python scripts/sync_daily_price_release_rs_only.py --lookback-days 10`
+
 ## 24) daily sync 워크플로 전환 (2026-06-12)
 
 ### Completed
