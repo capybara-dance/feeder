@@ -67,7 +67,11 @@ def search_tickers(keyword: str, limit: int = 200) -> pd.DataFrame:
                             STOCK_NAME,
                             MARKET_CODE,
                             ASSET_TYPE,
-                            ROW_NUMBER() OVER (ORDER BY TICKER) AS RN
+                            ROW_NUMBER() OVER (
+                                ORDER BY
+                                    CASE WHEN TICKER = '069500' THEN 0 ELSE 1 END,
+                                    TICKER
+                            ) AS RN
                         FROM STOCK_MASTER
                         WHERE IS_LISTED = 'Y'
                     )
@@ -254,10 +258,15 @@ def main() -> None:
         lambda row: f"{row['TICKER']} | {row['STOCK_NAME']} ({row['MARKET_CODE']}, {row['ASSET_TYPE']})",
         axis=1,
     )
+
+    default_ticker = "069500"
+    default_candidates = ticker_df.index[ticker_df["TICKER"].astype(str) == default_ticker].tolist()
+    default_index = default_candidates[0] if default_candidates else ticker_df.index[0]
+
     selected_idx = st.selectbox(
         "Select a ticker",
         options=ticker_df.index.tolist(),
-        index=0,
+        index=ticker_df.index.tolist().index(default_index),
         format_func=lambda idx: ticker_df.loc[idx, "DISPLAY"],
     )
     selected_ticker = str(ticker_df.loc[selected_idx, "TICKER"])
