@@ -28,8 +28,12 @@ pip install -r requirements.txt
 
 제공 기능:
 - 티커/종목명 검색
-- 티커 선택 시 최근 1년 캔들 차트 표시
+- 티커 선택 시 TradingView 차트 표시
 - 최근 가격 데이터 표 확인
+
+참고:
+- TradingView Lightweight Charts Library로 렌더링합니다.
+- 차트 데이터는 Oracle DB(`DAILY_PRICE`) 조회 결과만 사용합니다.
 
 ## 데이터 명세 문서
 
