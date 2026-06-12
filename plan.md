@@ -529,3 +529,14 @@
 
 ### 추가 보완 19 (2026-06-12)
 - Streamlit 차트에 캔들 / 바(시고저종) 토글을 추가했다.
+
+### 추가 보완 20 (2026-06-12)
+- `streamlit_app.py` 메인 화면을 탭 기반 UI로 재구성해 기존 차트 조회를 `개별 종목 차트` 탭으로 분리했다.
+- `STOCK_MASTER`, `DAILY_PRICE`, `STOCK_DIVIDEND`, `ETF_COMPONENT`, `STOCK_INDUSTRY`를 직접 조회할 수 있는 Oracle 테이블 브라우저 탭을 추가했다.
+- 각 테이블 탭에 row 수, 날짜 범위, 컬럼 스키마, 키워드 검색, 미리보기 행 수 조절 기능을 추가했다.
+
+### 문서 반영 (2026-06-12)
+- `README.md`의 Streamlit 앱 설명을 탭 구조와 테이블 브라우저 기능 기준으로 갱신했다.
+
+### Commands used for verification
+- `/workspaces/feeder/.venv/bin/python -m py_compile streamlit_app.py`
