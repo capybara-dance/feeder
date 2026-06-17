@@ -70,16 +70,26 @@ jobs:
         id: args
         shell: bash
         run: |
-          ARGS="--lookback-days 10 --batch-size 2000 --release-repo capybara-dance/capybara_fetcher"
+          LOOKBACK_DAYS="10"
+          BATCH_SIZE="2000"
+          RELEASE_REPO="capybara-dance/capybara_fetcher"
+          RELEASE_TAG=""
+          NO_PROGRESS="false"
+          DRY_RUN="false"
 
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            if [[ -n "${{ inputs.lookback_days }}" ]]; then ARGS+=" --lookback-days ${{ inputs.lookback_days }}"; fi
-            if [[ -n "${{ inputs.release_repo }}" ]]; then ARGS+=" --release-repo ${{ inputs.release_repo }}"; fi
-            if [[ -n "${{ inputs.release_tag }}" ]]; then ARGS+=" --release-tag ${{ inputs.release_tag }}"; fi
-            if [[ -n "${{ inputs.batch_size }}" ]]; then ARGS+=" --batch-size ${{ inputs.batch_size }}"; fi
-            if [[ "${{ inputs.no_progress }}" == "true" ]]; then ARGS+=" --no-progress"; fi
-            if [[ "${{ inputs.dry_run }}" == "true" ]]; then ARGS+=" --dry-run"; fi
+            if [[ -n "${{ inputs.lookback_days }}" ]]; then LOOKBACK_DAYS="${{ inputs.lookback_days }}"; fi
+            if [[ -n "${{ inputs.release_repo }}" ]]; then RELEASE_REPO="${{ inputs.release_repo }}"; fi
+            if [[ -n "${{ inputs.release_tag }}" ]]; then RELEASE_TAG="${{ inputs.release_tag }}"; fi
+            if [[ -n "${{ inputs.batch_size }}" ]]; then BATCH_SIZE="${{ inputs.batch_size }}"; fi
+            NO_PROGRESS="${{ inputs.no_progress }}"
+            DRY_RUN="${{ inputs.dry_run }}"
           fi
+
+          ARGS="--lookback-days ${LOOKBACK_DAYS} --batch-size ${BATCH_SIZE} --release-repo ${RELEASE_REPO}"
+          if [[ -n "${RELEASE_TAG}" ]]; then ARGS+=" --release-tag ${RELEASE_TAG}"; fi
+          if [[ "${NO_PROGRESS}" == "true" ]]; then ARGS+=" --no-progress"; fi
+          if [[ "${DRY_RUN}" == "true" ]]; then ARGS+=" --dry-run"; fi
 
           echo "args=${ARGS}" >> "${GITHUB_OUTPUT}"
 

@@ -458,6 +458,28 @@
 ### Commands used for verification
 - `/workspaces/feeder/.venv/bin/python -m py_compile streamlit_app.py`
 
+## 30) release daily FK(ORA-02291) 대응 (2026-06-17)
+
+### Completed
+- `scripts/sync_daily_price_release.py` 기본 실행 대상 테이블을 `price` 단독에서 `industry,master,price`로 변경했다.
+- `scripts/sync_oracle.py`에 방어 로직을 추가해 `source=release` + `DAILY_PRICE` 대상 실행 시 부모 테이블(`STOCK_INDUSTRY`, `STOCK_MASTER`)을 자동 포함하도록 보강했다.
+- `.github/workflows/sync_daily_price_release.yml`의 인자 빌드 로직을 정리해 `--lookback-days`, `--release-repo`, `--batch-size` 중복 전달이 발생하지 않도록 수정했다.
+- 회귀 방지를 위해 `tests/test_sync_daily_price_release.py`를 추가해 래퍼 스크립트가 부모 테이블 포함 인자를 항상 전달하는지 검증하도록 했다.
+
+### In progress
+- 없음.
+
+### Next 3 concrete tasks
+1. GitHub Actions에서 `Sync Daily Price Release Daily Syncer`를 재실행해 FK 오류 재발 여부를 확인한다.
+2. 필요하면 `sync_daily_price_release.yml`에 `tables` 입력값을 노출해 운영자가 선택 실행할 수 있게 한다.
+3. release 자산과 DB `STOCK_MASTER` 간 티커 불일치 수를 리포트 지표로 추가해 사전 감지한다.
+
+### Risks / blockers
+- release 자산에 존재하지만 master 자산에 없는 티커가 계속 유입되면, 현재는 해당 가격 행을 제거하므로 일부 종목 데이터가 누락될 수 있다.
+
+### Commands used for verification
+- `/workspaces/feeder/.venv/bin/python -m pytest -q tests/test_sync_daily_price_release.py tests/test_release_ingest.py tests/test_sync_oracle.py`
+
 ## 29) release full workflow dividend 제외 수정 (2026-06-12)
 
 ### Completed
