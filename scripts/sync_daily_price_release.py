@@ -50,7 +50,7 @@ def main() -> None:
         "--batch-size",
         str(int(args.batch_size)),
         "--tables",
-        "price",
+        "industry,master,price",
         "--skip-dividends",
     ]
 

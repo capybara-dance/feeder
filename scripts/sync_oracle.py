@@ -376,6 +376,15 @@ def main() -> None:
     )
     args = parser.parse_args()
     target_tables = _parse_target_tables(args.tables)
+    if args.source == "release" and "price" in target_tables:
+        required_parent_tables = {"industry", "master"}
+        missing_parent_tables = required_parent_tables.difference(target_tables)
+        if missing_parent_tables:
+            target_tables = target_tables.union(required_parent_tables)
+            logger.info(
+                "source=release with DAILY_PRICE requires parent tables; auto-including: %s",
+                ",".join(sorted(missing_parent_tables)),
+            )
 
     resolved_start, resolved_end, target_dates = _resolve_collection_window(
         mode=args.mode,
