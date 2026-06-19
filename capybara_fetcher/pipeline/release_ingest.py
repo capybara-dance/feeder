@@ -4,6 +4,7 @@ import json
 import logging
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -155,36 +156,85 @@ def _resolve_release(repo: str, *, tag: str | None, token: str | None) -> tuple[
     return info, asset_map
 
 
+_RETRYABLE_HTTP_CODES = {429, 500, 502, 503, 504}
+_DOWNLOAD_MAX_ATTEMPTS = 5
+_DOWNLOAD_BACKOFF_BASE = 2.0
+
+
+def _is_retryable(exc: urlerror.HTTPError) -> bool:
+    return exc.code in _RETRYABLE_HTTP_CODES
+
+
 def _read_parquet_url(url: str, *, token: str | None = None) -> pd.DataFrame:
     headers = {"User-Agent": "feeder-sync-oracle"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    req = urlrequest.Request(url=url, headers=headers)
-    try:
-        with urlrequest.urlopen(req) as resp:
-            data = resp.read()
-    except urlerror.HTTPError as e:
-        body = e.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"Release asset download failed: {url} status={e.code} body={body[:300]}") from e
-
-    return pd.read_parquet(BytesIO(data))
+    last_exc: Exception | None = None
+    for attempt in range(_DOWNLOAD_MAX_ATTEMPTS):
+        if attempt:
+            wait = _DOWNLOAD_BACKOFF_BASE ** attempt
+            logger.warning(
+                "Retrying parquet URL download (attempt %d/%d) after %.0fs: %s",
+                attempt + 1, _DOWNLOAD_MAX_ATTEMPTS, wait, url,
+            )
+            time.sleep(wait)
+        req = urlrequest.Request(url=url, headers=headers)
+        try:
+            with urlrequest.urlopen(req) as resp:
+                data = resp.read()
+            return pd.read_parquet(BytesIO(data))
+        except urlerror.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore")
+            if _is_retryable(e):
+                last_exc = RuntimeError(
+                    f"Release asset download failed: {url} status={e.code} body={body[:300]}"
+                )
+                logger.warning("Transient HTTP %s for %s; will retry", e.code, url)
+                continue
+            raise RuntimeError(
+                f"Release asset download failed: {url} status={e.code} body={body[:300]}"
+            ) from e
+    raise RuntimeError(
+        f"Release asset download failed after {_DOWNLOAD_MAX_ATTEMPTS} attempts: {url}"
+    ) from last_exc
 
 
 def _download_url_to_file(url: str, out_path: Path, *, token: str | None = None) -> None:
     headers = {"User-Agent": "feeder-sync-oracle"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    req = urlrequest.Request(url=url, headers=headers)
-    try:
-        with urlrequest.urlopen(req) as resp, out_path.open("wb") as fp:
-            while True:
-                chunk = resp.read(8 * 1024 * 1024)
-                if not chunk:
-                    break
-                fp.write(chunk)
-    except urlerror.HTTPError as e:
-        body = e.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"Release asset download failed: {url} status={e.code} body={body[:300]}") from e
+    last_exc: Exception | None = None
+    for attempt in range(_DOWNLOAD_MAX_ATTEMPTS):
+        if attempt:
+            wait = _DOWNLOAD_BACKOFF_BASE ** attempt
+            logger.warning(
+                "Retrying file download (attempt %d/%d) after %.0fs: %s",
+                attempt + 1, _DOWNLOAD_MAX_ATTEMPTS, wait, url,
+            )
+            time.sleep(wait)
+        req = urlrequest.Request(url=url, headers=headers)
+        try:
+            with urlrequest.urlopen(req) as resp, out_path.open("wb") as fp:
+                while True:
+                    chunk = resp.read(8 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    fp.write(chunk)
+            return
+        except urlerror.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore")
+            if _is_retryable(e):
+                last_exc = RuntimeError(
+                    f"Release asset download failed: {url} status={e.code} body={body[:300]}"
+                )
+                logger.warning("Transient HTTP %s for %s; will retry", e.code, url)
+                continue
+            raise RuntimeError(
+                f"Release asset download failed: {url} status={e.code} body={body[:300]}"
+            ) from e
+    raise RuntimeError(
+        f"Release asset download failed after {_DOWNLOAD_MAX_ATTEMPTS} attempts: {url}"
+    ) from last_exc
 
 
 def _ensure_master_columns(df: pd.DataFrame) -> pd.DataFrame:
