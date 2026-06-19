@@ -172,7 +172,7 @@ def _read_parquet_url(url: str, *, token: str | None = None) -> pd.DataFrame:
     last_exc: Exception | None = None
     for attempt in range(_DOWNLOAD_MAX_ATTEMPTS):
         if attempt:
-            wait = _DOWNLOAD_BACKOFF_BASE ** attempt
+            wait = _DOWNLOAD_BACKOFF_BASE ** (attempt - 1)
             logger.warning(
                 "Retrying parquet URL download (attempt %d/%d) after %.0fs: %s",
                 attempt + 1, _DOWNLOAD_MAX_ATTEMPTS, wait, url,
@@ -189,6 +189,7 @@ def _read_parquet_url(url: str, *, token: str | None = None) -> pd.DataFrame:
                 last_exc = RuntimeError(
                     f"Release asset download failed: {url} status={e.code} body={body[:300]}"
                 )
+                last_exc.__cause__ = e
                 logger.warning("Transient HTTP %s for %s; will retry", e.code, url)
                 continue
             raise RuntimeError(
@@ -206,12 +207,13 @@ def _download_url_to_file(url: str, out_path: Path, *, token: str | None = None)
     last_exc: Exception | None = None
     for attempt in range(_DOWNLOAD_MAX_ATTEMPTS):
         if attempt:
-            wait = _DOWNLOAD_BACKOFF_BASE ** attempt
+            wait = _DOWNLOAD_BACKOFF_BASE ** (attempt - 1)
             logger.warning(
                 "Retrying file download (attempt %d/%d) after %.0fs: %s",
                 attempt + 1, _DOWNLOAD_MAX_ATTEMPTS, wait, url,
             )
             time.sleep(wait)
+        out_path.unlink(missing_ok=True)
         req = urlrequest.Request(url=url, headers=headers)
         try:
             with urlrequest.urlopen(req) as resp, out_path.open("wb") as fp:
@@ -227,6 +229,7 @@ def _download_url_to_file(url: str, out_path: Path, *, token: str | None = None)
                 last_exc = RuntimeError(
                     f"Release asset download failed: {url} status={e.code} body={body[:300]}"
                 )
+                last_exc.__cause__ = e
                 logger.warning("Transient HTTP %s for %s; will retry", e.code, url)
                 continue
             raise RuntimeError(
