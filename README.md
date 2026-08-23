@@ -153,6 +153,44 @@ Oracle DB의 각 테이블 일부 데이터를 조회해 HTML 리포트를 만�
 - Yahoo 심볼은 한국 종목 기준 `.KS` 우선, 필요 시 `.KQ` fallback으로 조회합니다.
 - 현재 저장 컬럼 매핑: `TICKER`, `EX_DIVIDEND_DATE`, `DIVIDEND_PER_SHARE`, `RECORD_DATE`, `PAYMENT_DATE`, `DIVIDEND_TYPE`.
 
+## ETF 구성종목(PDF) 수집
+
+한국투자증권 API는 ETF 구성종목을 **오늘 스냅샷만** 줍니다. KRX 정보데이터시스템의
+PDF(Portfolio Deposit File)는 일자를 받으므로(최소 2013년까지 확인) 이쪽으로 모읍니다.
+
+**로그인이 필요합니다.** `KRX_ID`/`KRX_PW`가 있으면 `pykrx`가 자동 로그인합니다.
+없으면 KRX가 HTTP 400 `LOGOUT`을 주고 pykrx는 빈 결과를 돌려주는데, 그건 '상장 전'과
+구분되지 않아 빈 데이터가 조용히 쌓입니다. 그래서 **수집 시작 전에 막습니다.**
+
+```bash
+# 증분 — 직전 릴리즈에 이어붙인다 (기본)
+python scripts/collect_etf_components.py
+
+# 백필 — 범위를 지정한다
+python scripts/collect_etf_components.py --start-date 2022-01-01
+
+# 이번 실행 호출 상한 (GitHub Actions 시간 제한 방어)
+python scripts/collect_etf_components.py --max-calls 15000
+
+# 대상 목록 대신 상장 ETF 전체 (900여 개 — 과거 소급은 청크로 나눠야 한다)
+python scripts/collect_etf_components.py --all
+```
+
+산출물은 `cache/etf_components.parquet`과 `cache/etf_components.meta.json`입니다.
+컬럼은 `docs/data_dictionary.md`의 `ETF_COMPONENT` 테이블에 맞춰 두었습니다 —
+`BASE_DATE`, `ETF_TICKER`, `COMPONENT_TICKER`, `COMPONENT_NAME`, `SHARES_HELD`,
+`AMOUNT`, `MARKET_CAP`, `WEIGHT_PCT`.
+
+수집 대상은 `config/etf_universe.txt`(`코드<TAB>이름`)에 적습니다.
+
+**주 1회로 모읍니다.** 구성종목 목록은 거의 변하지 않아(1년 52주 중 변경 2~4주) 매일
+받을 이유가 없습니다. 다만 지수 개편처럼 한 번에 크게 바뀌는 사건이 연 1회쯤 있어
+월 1회면 그 오차를 최대 4주 안고 갑니다. 근거는
+`capybara_fetcher/pipeline/etf_components.py` 모듈 독스트링에 있습니다.
+
+최초 백필은 38종목 × 4.6년 ≈ 9,200회 호출로 약 1.4시간이고, 이후 주간 실행은
+38회 = 30초입니다. 이미 모은 `(ETF, 일자)`는 다시 받지 않습니다.
+
 ## GitHub Actions 실행
 
 수집 리포트 실행 워크플로는 아래 파일에 추가되어 있습니다.

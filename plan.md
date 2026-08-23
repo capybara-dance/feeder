@@ -712,3 +712,70 @@
 
 ### Commands used for verification
 - `/workspaces/feeder/.venv/bin/python -m py_compile streamlit_app.py`
+
+---
+
+## Handoff — ETF 구성종목(PDF) 수집 (2026-08-23)
+
+### Completed
+- **`ETF_COMPONENT` 수집의 소스 문제를 풀었다.** 그동안 "source/collector pending"이던
+  이유는 한국투자증권 API가 **오늘 스냅샷만** 주기 때문이었다. KRX 정보데이터시스템의
+  PDF(Portfolio Deposit File)는 일자를 받는다 — **최소 2013년까지 확인**했다.
+  로그인이 필요한데 `pykrx`가 `KRX_ID`/`KRX_PW`를 읽어 자동 로그인하고,
+  두 시크릿은 이 저장소에 이미 있다.
+- `providers/pykrx_provider.py`에 `fetch_etf_pdf` / `list_etf_tickers` 추가,
+  `CompositeProvider`로 노출 (AGENTS.md의 provider 캡슐화 규칙 준수 — 외부 진입점은
+  `CompositeProvider`만 쓴다).
+- `pipeline/etf_components.py` — 주 단위 격자 수집기. 증분(이미 모은 (ETF, 일자)는
+  건너뜀), 호출 상한(`max_calls`), 빈 결과와 실패를 구분해 집계.
+- `scripts/collect_etf_components.py` — CLI. 직전 릴리즈의 parquet을 받아 이어붙인다.
+- `.github/workflows/collect_etf_components.yml` — 매주 토 07:00 KST, 릴리즈 게시.
+- `config/etf_universe.txt` — 대상 ETF 38개 (leverage의 섹터 RS 전략이 쓰는 목록).
+- `tests/test_etf_components.py` — 17개.
+
+### 왜 주 1회인가
+구성종목 *목록*은 거의 안 변한다. 1년치를 주간으로 재보니 변경이 있었던 주가 52주 중
+2~4주뿐이었다. 샘플 주기를 늘렸을 때 실제 목록과 어긋나는 종목 수:
+
+| 주기 | 평균 오차종목 (KODEX200 / 반도체 / 200IT) | 최대 |
+|---|---|---|
+| 2주 | 0.08 / 0.49 / 0.00 | 2 / 25 / 0 |
+| 월 | 0.57 / 0.53 / 0.04 | 8 / **25** / 1 |
+| 분기 | 5.23 / 4.96 / 0.75 | 19 / 25 / 3 |
+
+월 단위도 평균은 작지만 최대가 크다. KODEX 반도체가 2025-09-12 지수 개편으로
+56→37종목(편출 22)이 한 번에 바뀌었는데, 월 샘플이면 그 오차를 최대 4주 안고 간다.
+주 단위면 최대 1주이고, 백필 비용 차이는 1시간뿐이다.
+
+### 실측 (2026-08-23)
+- 소규모 실행: 304건 조회 → 성공 304 / 실패 0 / 7,482행 / 2.7분 (**0.53초/건**)
+- 2022-01-01 백필 추정: 38 ETF × 242주 ≈ **9,200회 ≈ 1.4시간** (Actions 한 번에 가능)
+- 이후 주간 실행: 38회 ≈ 30초
+- 수집 데이터가 독립 측정과 일치함을 확인 (KODEX 반도체 7/31 편출 1, 8/21 편입 1)
+
+### In progress
+없음. 워크플로를 수동 실행해 최초 백필을 한 번 돌리면 운영이 시작된다.
+
+### Next 3 concrete tasks
+1. `Collect ETF Components` 워크플로를 `start_date=2022-01-01`로 **수동 1회 실행**해
+   백필하고, 만들어진 릴리즈로 이후 주간 증분이 도는지 확인한다.
+2. 모인 parquet을 `ETF_COMPONENT` 테이블에 적재하는 경로를 추가한다
+   (스키마는 이미 맞춰 뒀다 — `BASE_DATE`/`ETF_TICKER`/`COMPONENT_TICKER`/`WEIGHT_PCT`).
+   `docs/data_dictionary.md`의 "Not implemented"를 그때 갱신한다.
+3. 대상 ETF 목록(`config/etf_universe.txt`)을 늘릴지 정한다. `--all`로 상장 ETF 전체
+   (900여 개)도 되지만 과거 소급이 40시간대라 청크 실행이 필요하다.
+
+### Risks/blockers
+- **KRX 자격증명이 없으면 조용히 빈 데이터가 쌓인다.** KRX가 HTTP 400 `LOGOUT`을 주면
+  pykrx가 빈 DataFrame을 돌려주는데, 그건 '상장 전'과 구분되지 않는다. 그래서 수집
+  시작 전에 `require_krx_credentials()`가 먼저 막는다.
+- KRX rate limit은 미확인이다. 0.2초 간격으로 304건을 실패 없이 받았지만 9,200건에서
+  어떨지는 모른다. 실패율이 50%를 넘으면 스크립트가 종료코드 1을 낸다.
+- KRX 세션은 1시간 만료다. pykrx가 만료 5분 전 자동 갱신하므로 장시간 수집은 문제없다.
+
+### Commands used for verification
+- `python -m pytest tests/ -q` → 27 passed
+- `python scripts/collect_etf_components.py --start-date 2026-07-01 --end-date 2026-08-21 --no-resume`
+- `python scripts/collect_etf_components.py --start-date 2026-08-14 --release-tag data-20260605-1815`
+  (릴리즈에 자산이 없을 때 처음부터 모으는 경로 확인)
+

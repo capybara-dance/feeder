@@ -33,3 +33,11 @@ class DataProvider(Protocol):
         adjusted: bool = True,
     ) -> pd.DataFrame:
         """Return raw OHLCV DataFrame."""
+
+    def fetch_etf_pdf(
+        self,
+        *,
+        ticker: str,
+        date: str,
+    ) -> pd.DataFrame:
+        """Return ETF Portfolio Deposit File (constituents) for one date."""

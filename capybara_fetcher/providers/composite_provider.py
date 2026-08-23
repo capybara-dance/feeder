@@ -200,6 +200,34 @@ class CompositeProvider(DataProvider):
         except Exception:
             return None
 
+    def fetch_etf_pdf(self, *, ticker: str, date: str) -> pd.DataFrame:
+        """ETF 구성종목(PDF)을 특정 일자로 조회한다. KRX(pykrx)만 이 데이터를 준다.
+
+        대체 소스가 없어 폴백이 없다 — 실패하면 빈 DataFrame이고, **상장 전인지
+        조회 실패인지 여기서는 구분되지 않는다.** 구분은 수집 파이프라인이 한다
+        (자격증명 사전 확인 + 재시도).
+
+        `_pykrx_lock`을 잡는 이유는 다른 pykrx 호출과 같다 — pykrx는 전역 세션을
+        쓰므로 동시 호출이 서로의 로그인 상태를 밟는다.
+        """
+        pykrx_provider = object.__getattribute__(self, "_pykrx_provider")
+        lock = object.__getattribute__(self, "_pykrx_lock")
+        try:
+            with lock:
+                return pykrx_provider.fetch_etf_pdf(ticker=ticker, date=date)
+        except Exception:
+            return pd.DataFrame()
+
+    def list_etf_tickers(self, *, date: str) -> list[str]:
+        """해당 일자에 상장돼 있던 ETF 티커 전체. 실패하면 빈 목록."""
+        pykrx_provider = object.__getattribute__(self, "_pykrx_provider")
+        lock = object.__getattribute__(self, "_pykrx_lock")
+        try:
+            with lock:
+                return pykrx_provider.list_etf_tickers(date=date)
+        except Exception:
+            return []
+
     def fetch_dividends(
         self,
         *,

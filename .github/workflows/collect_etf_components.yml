@@ -1,0 +1,136 @@
+name: Collect ETF Components
+
+# ETF 구성종목(PDF)을 주 1회 모아 릴리즈로 올린다.
+#
+# 한국투자증권 API는 구성종목을 오늘 스냅샷만 준다 — 과거를 물어볼 파라미터가 없다.
+# KRX 정보데이터시스템의 PDF는 일자를 받으므로(최소 2013년까지 확인) 여기서 모은다.
+# 로그인이 필요하고, `KRX_ID`/`KRX_PW` 시크릿이 이미 이 저장소에 있다.
+#
+# **증분이다.** 직전 릴리즈의 parquet을 받아 이어붙이므로 이미 모은 (ETF, 일자)는
+# 다시 받지 않는다. 최초 백필만 오래 걸리고(38종목 × 4.6년 ≈ 1.4시간) 이후 주간
+# 실행은 38회 호출 = 30초다.
+#
+# 주 1회인 이유: 구성종목 *목록*은 거의 안 변한다(1년 52주 중 변경 2~4주). 다만
+# 지수 개편처럼 한 번에 크게 바뀌는 사건이 연 1회쯤 있어서, 월 1회면 그 오차를
+# 최대 4주 안고 간다. 주 1회면 최대 1주다. 자세한 근거는
+# `capybara_fetcher/pipeline/etf_components.py` 모듈 독스트링에 있다.
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: 수집 시작일 (YYYY-MM-DD)
+        required: false
+        default: "2022-01-01"
+        type: string
+      end_date:
+        description: 수집 종료일 (비우면 오늘)
+        required: false
+        default: ""
+        type: string
+      max_calls:
+        description: 이번 실행 호출 상한 (0 = 무제한). Actions 6시간 제한 방어용
+        required: false
+        default: "0"
+        type: string
+      no_resume:
+        description: 직전 릴리즈를 이어받지 않고 처음부터 모은다
+        required: false
+        default: false
+        type: boolean
+      publish:
+        description: 릴리즈로 게시한다 (끄면 아티팩트만)
+        required: false
+        default: true
+        type: boolean
+
+  # 매주 토요일 07:00 KST (금요일 22:00 UTC).
+  # 금요일 기준일 PDF가 공시된 뒤에 돌아야 하므로 장 마감 한참 뒤로 잡았다.
+  schedule:
+    - cron: "0 22 * * 5"
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    # 최초 백필이 1.4시간이라 기본값(360분) 안에 들어오지만, 무한정 물리는 것은 막는다.
+    timeout-minutes: 300
+    env:
+      TZ: Asia/Seoul
+      KRX_ID: ${{ secrets.KRX_ID }}
+      KRX_PW: ${{ secrets.KRX_PW }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build run arguments
+        id: args
+        shell: bash
+        run: |
+          START_DATE="2022-01-01"
+          END_DATE=""
+          MAX_CALLS="0"
+          NO_RESUME="false"
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            if [[ -n "${{ inputs.start_date }}" ]]; then START_DATE="${{ inputs.start_date }}"; fi
+            if [[ -n "${{ inputs.end_date }}" ]]; then END_DATE="${{ inputs.end_date }}"; fi
+            if [[ -n "${{ inputs.max_calls }}" ]]; then MAX_CALLS="${{ inputs.max_calls }}"; fi
+            NO_RESUME="${{ inputs.no_resume }}"
+          fi
+
+          ARGS="--start-date ${START_DATE} --max-calls ${MAX_CALLS}"
+          if [[ -n "${END_DATE}" ]]; then ARGS+=" --end-date ${END_DATE}"; fi
+          if [[ "${NO_RESUME}" == "true" ]]; then ARGS+=" --no-resume"; fi
+
+          echo "args=${ARGS}" >> "${GITHUB_OUTPUT}"
+
+      - name: Collect ETF components
+        shell: bash
+        run: python scripts/collect_etf_components.py ${{ steps.args.outputs.args }}
+
+      - name: Build release tag
+        id: tag
+        shell: bash
+        run: echo "tag_name=etf-components-$(date +'%Y%m%d-%H%M')" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: etf-components-${{ github.run_id }}
+          path: |
+            cache/etf_components.parquet
+            cache/etf_components.meta.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      # 릴리즈는 성공했을 때만 만든다. 중간에 끊긴 결과를 latest로 올리면 다음
+      # 실행이 그걸 이어받아 구멍이 그대로 굳는다 — 아티팩트로만 남긴다.
+      - name: Create Release
+        if: success() && (github.event_name == 'schedule' || inputs.publish)
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.tag.outputs.tag_name }}
+          name: ETF Components ${{ steps.tag.outputs.tag_name }} (KST)
+          files: |
+            cache/etf_components.parquet
+            cache/etf_components.meta.json
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
