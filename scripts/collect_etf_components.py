@@ -38,6 +38,7 @@ from capybara_fetcher.pipeline.etf_components import (  # noqa: E402
     EtfComponentCollector,
     build_meta,
     existing_pairs,
+    fetch_listed_by_date,
     load_etf_universe,
     merge_snapshots,
     require_krx_credentials,
@@ -79,7 +80,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--end-date", default="")
     parser.add_argument("--weekday", type=int, default=4, help="주간 기준 요일 (월=0 … 금=4)")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
-    parser.add_argument("--sleep", type=float, default=0.2, help="호출 간 대기(초)")
+    parser.add_argument("--sleep", type=float, default=0.6, help="호출 간 대기(초)")
+    parser.add_argument("--probe-after-empty", type=int, default=20,
+                        help="빈 결과가 이만큼 연달으면 차단인지 탐침한다")
+    parser.add_argument("--cooldown", type=float, default=300.0,
+                        help="차단 확인 시 쉬었다 재시도할 간격(초). 0이면 즉시 중단")
+    parser.add_argument("--max-blocks", type=int, default=3,
+                        help="쿨다운 재시도 횟수. 넘으면 모은 것까지 저장하고 끝낸다")
+    parser.add_argument("--no-listed-filter", action="store_true",
+                        help="상장 목록 사전 조회를 건너뛴다 (일자당 1회 호출을 아낀다)")
     parser.add_argument("--max-calls", type=int, default=0, help="이번 실행 호출 상한 (0=무제한)")
     parser.add_argument("--no-resume", action="store_true", help="직전 릴리즈를 이어받지 않는다")
     parser.add_argument("--release-repo", default="capybara-dance/feeder")
@@ -109,28 +118,55 @@ def main(argv: list[str] | None = None) -> int:
         )
     already = existing_pairs(previous)
 
-    todo = sum(1 for d in dates for t in tickers if (t, d) not in already)
     print(f"기간 {args.start_date} ~ {end_date} / 주간 시점 {len(dates)}개")
-    print(f"이미 모은 조합 {len(already):,} / 이번에 받을 조합 {todo:,}")
+    print(f"이미 모은 조합 {len(already):,}")
+
+    # 그날 상장돼 있던 ETF만 묻는다 — 상장 전 빈 결과가 섞이면 차단 감지가 무뎌진다.
+    listed_by_date = None
+    if not args.no_listed_filter:
+        print("상장 목록 사전 조회 중…")
+        listed_by_date = fetch_listed_by_date(provider, dates)
+        print(f"  {len(listed_by_date)}/{len(dates)}개 일자 확보")
+
+    # 상장 필터까지 반영해서 센다. 필터 전 숫자를 보여주면 실제 조회 수와 크게 어긋난다.
+    todo = sum(
+        1
+        for d in dates
+        for t in tickers
+        if (t, d) not in already
+        and not (listed_by_date and d in listed_by_date and t not in listed_by_date[d])
+    )
+    print(f"이번에 받을 조합 {todo:,}")
     if args.max_calls:
         print(f"이번 실행 상한 {args.max_calls:,}회")
     if todo == 0:
         print("새로 받을 게 없습니다.")
 
-    collector = EtfComponentCollector(provider=provider, sleep_sec=args.sleep)
+    collector = EtfComponentCollector(
+        provider=provider,
+        sleep_sec=args.sleep,
+        probe_after_empty=args.probe_after_empty,
+        cooldown_sec=args.cooldown,
+        max_blocks=args.max_blocks,
+    )
     fresh = collector.collect(
         tickers=tickers,
         dates=dates,
         already=already,
         max_calls=args.max_calls or None,
+        listed_by_date=listed_by_date,
     )
     stats = collector.stats
     print(
         f"조회 {stats.requested:,}건 → 성공 {stats.fetched:,} / 빈 결과 {stats.empty:,}"
         f" / 실패 {stats.failed:,} / {stats.rows:,}행 / {stats.elapsed_sec/60:.1f}분"
     )
+    if stats.skipped_unlisted:
+        print(f"  상장 전이라 건너뛴 조합 {stats.skipped_unlisted:,}건")
     if stats.stopped_early:
         print("⚠️ 호출 상한에 걸려 중단했습니다 — 다음 실행이 이어받습니다.")
+    if stats.blocked:
+        print("⛔ KRX 차단으로 중단했습니다 — 모은 것까지 저장합니다. 나중에 다시 실행하세요.")
 
     merged = merge_snapshots(previous, fresh)
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -145,10 +181,17 @@ def main(argv: list[str] | None = None) -> int:
     print(f"저장: {args.out} ({len(merged):,}행)")
     print(f"      {rng['start']} ~ {rng['end']} / {rng['snapshots']}개 시점 / ETF {meta['etf_count']}개")
 
-    # 실패가 절반을 넘으면 뭔가 잘못된 것이다 (로그인 만료·차단 등) — 종료코드로 알린다
+    # 차단은 **실패가 아니라 빈 결과**로 오므로 실패율만 봐서는 안 잡힌다
+    # (첫 백필이 그렇게 3.7시간을 헛돌았다). 빈 결과 비율도 함께 본다.
     if stats.requested and stats.failed / stats.requested > 0.5:
-        print("⚠️ 실패율이 50%를 넘습니다 — KRX 세션이나 차단 여부를 확인하세요.")
+        print("⚠️ 실패율이 50%를 넘습니다 — KRX 세션을 확인하세요.")
         return 1
+    if stats.requested >= 50 and stats.fetched == 0:
+        print("⚠️ 한 건도 못 받았습니다 — 로그인이나 차단 여부를 확인하세요.")
+        return 1
+
+    # 차단으로 멈춘 것은 **부분 성공**이다. 모은 만큼 릴리즈해야 다음 실행이 이어받는다.
+    # 종료코드 0으로 두되 로그로 분명히 알린다.
     return 0
 
 

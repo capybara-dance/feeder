@@ -26,8 +26,26 @@ KRX 정보데이터시스템의 PDF(Portfolio Deposit File)는 일자를 받는�
 
 ## 증분
 
-이미 모은 (ETF, 일자)는 다시 받지 않는다. 최초 백필만 오래 걸리고(38종목 × 4.6년 ≈
-1.3시간) 이후 주간 실행은 38회 호출 = 30초다.
+이미 모은 (ETF, 일자)는 다시 받지 않는다. **빈 결과는 기록하지 않으므로** 다음 실행이
+다시 시도한다 — 중간에 끊겨도 구멍이 굳지 않는다.
+
+## ⚠️ KRX는 대량 요청을 차단한다 (2026-08-23 실측)
+
+첫 백필(9,196건 시도)에서 **약 90건을 받고 막혔다.** 그 뒤 3.7시간 동안 9,099건이
+전부 빈 결과였고, 스냅샷은 240개 중 6개만 남았다.
+
+**차단은 예외가 아니라 빈 DataFrame으로 온다.** pykrx가 그렇게 돌려준다. 그래서
+"상장 전"과 구분되지 않고, 실패 카운트에도 안 잡혀 실패율 가드가 무력화됐다.
+
+두 가지로 막는다.
+
+1. **탐침(probe)** — 빈 결과가 연달아 나오면 *반드시 데이터가 있는* 조합을 하나
+   찔러본다. 그것도 비었으면 차단이다. 휴장일이라 그날 전부 비는 경우와 구분된다.
+2. **상장 여부 사전 확인** — 그날 상장돼 있던 ETF만 조회한다. 상장 전 조합을 묻지
+   않으므로 빈 결과 자체가 드물어지고, 연속 빈 결과가 차단의 강한 신호가 된다.
+
+차단되면 쿨다운 후 탐침을 다시 던져 회복을 기다린다. 끝내 안 풀리면 **거기서 멈추고
+모은 것까지 돌려준다** — 다음 실행이 이어받는다.
 """
 
 from __future__ import annotations
@@ -62,6 +80,10 @@ _PDF_COLUMN_MAP = {
 }
 
 
+# 차단 판정용 탐침. 벤치마크 ETF는 전 구간 상장돼 있어 빈 결과가 나올 이유가 없다.
+PROBE_TICKER = "069500"
+
+
 class KrxCredentialsError(RuntimeError):
     """`KRX_ID`/`KRX_PW`가 없다.
 
@@ -80,6 +102,9 @@ class CollectionStats:
     rows: int = 0
     elapsed_sec: float = 0.0
     stopped_early: bool = False
+    skipped_unlisted: int = 0
+    blocks_seen: int = 0
+    blocked: bool = False
 
     def as_dict(self) -> dict:
         return {
@@ -90,6 +115,9 @@ class CollectionStats:
             "rows": self.rows,
             "elapsed_sec": round(self.elapsed_sec, 2),
             "stopped_early": self.stopped_early,
+            "skipped_unlisted": self.skipped_unlisted,
+            "blocks_seen": self.blocks_seen,
+            "blocked": self.blocked,
         }
 
 
@@ -98,11 +126,21 @@ class EtfComponentCollector:
     """주 단위 PDF 수집기.
 
     `provider`는 `CompositeProvider`여야 한다 (`AGENTS.md`의 provider 캡슐화 규칙).
+
+    기본 간격이 0.6초인 이유: 0.2초로 9,196건을 시도했다가 약 90건에서 차단당했다
+    (2026-08-23). 정확한 임계값은 모르므로 보수적으로 잡고, 그래도 막히면 탐침이
+    잡아낸다.
     """
 
     provider: object
-    sleep_sec: float = 0.2
+    sleep_sec: float = 0.6
     max_retries: int = 2
+    # 빈 결과가 이만큼 연달아 나오면 차단인지 탐침으로 확인한다.
+    probe_after_empty: int = 20
+    # 차단이 확인되면 이만큼 쉬었다 다시 탐침한다.
+    cooldown_sec: float = 300.0
+    # 쿨다운을 이 횟수만큼 시도하고도 안 풀리면 멈춘다.
+    max_blocks: int = 3
     stats: CollectionStats = field(default_factory=CollectionStats)
 
     def __post_init__(self) -> None:
@@ -115,43 +153,105 @@ class EtfComponentCollector:
         dates: list[str],
         already: set[tuple[str, str]] | None = None,
         max_calls: int | None = None,
+        listed_by_date: dict[str, set[str]] | None = None,
     ) -> pd.DataFrame:
         """(ETF, 일자) 격자를 훑어 구성종목을 모은다.
 
-        `already`에 있는 조합은 건너뛴다(증분). `max_calls`에 닿으면 거기서 멈추고
-        `stats.stopped_early`를 세운다 — GitHub Actions 6시간 제한 방어용이다.
-        모은 것까지는 그대로 돌려주므로 다음 실행이 이어받는다.
+        `already`에 있는 조합은 건너뛴다(증분). `listed_by_date`를 주면 **그날 상장돼
+        있던 ETF만** 묻는다 — 상장 전 조합을 빼면 빈 결과가 드물어져 차단 감지가 정확해진다.
+
+        멈추는 경우가 둘이다. 어느 쪽이든 **모은 것까지는 그대로 돌려주므로** 다음
+        실행이 이어받는다.
+
+        - `max_calls`에 닿음 → `stats.stopped_early`
+        - KRX 차단이 쿨다운으로도 안 풀림 → `stats.blocked`
         """
         already = already or set()
         started = time.perf_counter()
         frames: list[pd.DataFrame] = []
         calls = 0
+        consecutive_empty = 0
+        probe_date = max(dates) if dates else None
 
         # 오래된 날짜부터 채운다 — 중간에 끊겨도 "어디까지 채웠나"가 연속 구간이 된다
         for date in sorted(dates):
+            listed = listed_by_date.get(date) if listed_by_date else None
             for ticker in tickers:
                 if (ticker, date) in already:
                     continue
+                if listed is not None and ticker not in listed:
+                    # 그날 상장 전이다. 물어봐야 빈 결과이므로 호출을 아낀다.
+                    self.stats.skipped_unlisted += 1
+                    continue
                 if max_calls is not None and calls >= max_calls:
                     self.stats.stopped_early = True
-                    self.stats.elapsed_sec = time.perf_counter() - started
-                    return _concat(frames)
+                    return self._finish(frames, started)
 
                 self.stats.requested += 1
                 calls += 1
                 frame = self._fetch_one(ticker=ticker, date=date)
                 if frame is None:
                     self.stats.failed += 1
+                    consecutive_empty = 0
                 elif frame.empty:
-                    # 상장 전이거나 그날 PDF가 공시되지 않았다. 정상이다.
                     self.stats.empty += 1
+                    consecutive_empty += 1
+                    if consecutive_empty >= self.probe_after_empty:
+                        if not self._wait_out_block(probe_date):
+                            self.stats.blocked = True
+                            return self._finish(frames, started)
+                        consecutive_empty = 0
                 else:
                     self.stats.fetched += 1
                     self.stats.rows += len(frame)
                     frames.append(frame)
+                    consecutive_empty = 0
                 if self.sleep_sec:
                     time.sleep(self.sleep_sec)
 
+        return self._finish(frames, started)
+
+    # ── 차단 감지 ────────────────────────────────────────────────
+
+    def _is_alive(self, probe_date: str | None) -> bool:
+        """**반드시 데이터가 있는** 조합을 하나 찔러본다. 비어 오면 차단이다.
+
+        휴장일이라 그날 전 종목이 비는 경우와 구분하려고 탐침 날짜를 따로 둔다 —
+        수집 범위의 마지막 날짜는 최근 거래일이라 벤치마크 ETF가 반드시 응답한다.
+        """
+        if probe_date is None:
+            return True
+        try:
+            frame = self.provider.fetch_etf_pdf(ticker=PROBE_TICKER, date=probe_date)
+        except Exception:
+            return False
+        return frame is not None and not frame.empty
+
+    def _wait_out_block(self, probe_date: str | None) -> bool:
+        """차단인지 확인하고, 맞으면 쿨다운하며 회복을 기다린다.
+
+        Returns:
+            계속 진행해도 되면 True. 끝내 안 풀렸으면 False.
+        """
+        if self._is_alive(probe_date):
+            # 차단이 아니다 — 그 구간이 정말로 비어 있었을 뿐이다(휴장일 등).
+            return True
+
+        for attempt in range(1, self.max_blocks + 1):
+            self.stats.blocks_seen += 1
+            print(
+                f"  ⚠️ KRX 차단으로 보입니다 (탐침 실패). "
+                f"{self.cooldown_sec / 60:.0f}분 쉬었다 재시도합니다 "
+                f"[{attempt}/{self.max_blocks}]"
+            )
+            time.sleep(self.cooldown_sec)
+            if self._is_alive(probe_date):
+                print("  ✅ 회복됐습니다. 수집을 이어갑니다.")
+                return True
+        print("  ⛔ 쿨다운으로도 안 풀립니다. 여기서 멈추고 모은 것까지 저장합니다.")
+        return False
+
+    def _finish(self, frames: list[pd.DataFrame], started: float) -> pd.DataFrame:
         self.stats.elapsed_sec = time.perf_counter() - started
         return _concat(frames)
 
@@ -202,6 +302,29 @@ def weekly_dates(start: str, end: str, *, weekday: int = 4) -> list[str]:
     """
     days = pd.bdate_range(start, end, freq=f"W-{['MON','TUE','WED','THU','FRI'][weekday]}")
     return [d.strftime("%Y%m%d") for d in days]
+
+
+def fetch_listed_by_date(provider: object, dates: list[str], *, sleep_sec: float = 0.4) -> dict[str, set[str]]:
+    """일자별로 그날 상장돼 있던 ETF 집합을 받아 온다.
+
+    이걸 알면 상장 전 조합을 아예 묻지 않는다. 호출이 25%쯤 줄어드는 것보다 중요한 건
+    **빈 결과가 드물어져 차단 감지가 정확해진다**는 점이다 — 상장 전 빈 결과가 섞이면
+    "연속 빈 결과"가 차단의 신호로 쓸모없어진다.
+
+    실패한 날짜는 결과에서 빼둔다. 그 날짜는 필터 없이(=전부 조회) 진행된다 —
+    목록을 못 받았다고 그날을 통째로 건너뛰면 데이터가 사라진다.
+    """
+    listed: dict[str, set[str]] = {}
+    for date in sorted(dates):
+        try:
+            codes = provider.list_etf_tickers(date=date)
+        except Exception:
+            codes = []
+        if codes:
+            listed[date] = set(codes)
+        if sleep_sec:
+            time.sleep(sleep_sec)
+    return listed
 
 
 def load_etf_universe(path: str) -> dict[str, str]:
