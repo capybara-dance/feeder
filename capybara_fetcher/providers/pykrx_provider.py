@@ -45,6 +45,30 @@ class PykrxProvider:
         stock = _get_stock_module()
         return stock.get_market_ohlcv_by_date(start, end, ticker, adjusted=adjusted)
 
+    def fetch_etf_pdf(self, *, ticker: str, date: str) -> pd.DataFrame:
+        """ETF 구성종목(PDF, Portfolio Deposit File)을 특정 일자로 조회한다.
+
+        KRX 정보데이터시스템은 이 엔드포인트에 **로그인을 요구한다.** 비로그인으로
+        부르면 HTTP 400 `LOGOUT`이 오고 pykrx는 빈 DataFrame을 돌려준다. pykrx가
+        `KRX_ID`/`KRX_PW` 환경변수를 읽어 자동 로그인하므로 호출부는 신경 쓸 게 없지만,
+        **자격증명이 없으면 조용히 빈 결과가 된다** — 상장 전과 구분되지 않는다.
+        그래서 수집 파이프라인이 시작 전에 자격증명 유무를 먼저 확인한다.
+
+        상장 전 일자는 정상적으로 빈 DataFrame이다 (pykrx가 내부 오류를 찍지만
+        예외를 던지지는 않는다).
+
+        Returns:
+            index=티커, columns=[구성종목명, 계약수, 금액, 시가총액, 비중].
+            조회 실패나 상장 전이면 빈 DataFrame.
+        """
+        stock = _get_stock_module()
+        return stock.get_etf_portfolio_deposit_file(ticker, date.replace("-", ""))
+
+    def list_etf_tickers(self, *, date: str) -> list[str]:
+        """해당 일자에 상장돼 있던 ETF 티커 전체."""
+        stock = _get_stock_module()
+        return list(stock.get_etf_ticker_list(date.replace("-", "")))
+
     def fetch_market_cap(
         self,
         *,

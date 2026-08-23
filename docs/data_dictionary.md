@@ -126,7 +126,10 @@ Mapped target: STOCK_DIVIDEND
 - NOT NULL: ETF_TICKER, COMPONENT_TICKER, BASE_DATE, WEIGHT_PCT
 - NULL 허용: SHARES_HELD
 - FK: ETF_TICKER -> STOCK_MASTER.TICKER
-- Collection status: not implemented
+- Collection status: **collector implemented (release output), Oracle upsert pending**
+  - 수집: `scripts/collect_etf_components.py` — KRX PDF를 주 1회, `cache/etf_components.parquet`
+  - 워크플로: `.github/workflows/collect_etf_components.yml` (매주 토 07:00 KST, 릴리즈 게시)
+  - 산출 컬럼이 이 테이블 스키마와 동일하므로 적재는 upsert만 붙이면 된다
 
 ## 6. Collection Value to Oracle Value Mapping
 
@@ -301,7 +304,7 @@ HAVING COUNT(*) > 1;
 | STOCK_MASTER | Implemented (partial) | LISTED_DATE, DELISTED_DATE pending |
 | DAILY_PRICE | Implemented | market-cap fallback chain applied |
 | STOCK_DIVIDEND | Implemented (partial) | RECORD_DATE, PAYMENT_DATE pending |
-| ETF_COMPONENT | Not implemented | source/collector pending |
+| ETF_COMPONENT | Collector implemented (release) | KRX PDF 주 1회 수집 → parquet 릴리즈. Oracle upsert 미구현 |
 
 ## 12. Current Limitations
 - pykrx market-cap API can fail intermittently for some ticker/date combinations.
