@@ -7,8 +7,13 @@ name: Collect ETF Components
 # 로그인이 필요하고, `KRX_ID`/`KRX_PW` 시크릿이 이미 이 저장소에 있다.
 #
 # **증분이다.** 직전 릴리즈의 parquet을 받아 이어붙이므로 이미 모은 (ETF, 일자)는
-# 다시 받지 않는다. 최초 백필만 오래 걸리고(38종목 × 4.6년 ≈ 1.4시간) 이후 주간
-# 실행은 38회 호출 = 30초다.
+# 다시 받지 않는다. **빈 결과는 기록하지 않으므로** 중간에 끊겨도 다음 실행이 다시
+# 시도한다 — 구멍이 굳지 않는다.
+#
+# ⚠️ **KRX는 대량 요청을 차단한다.** 첫 백필이 약 90건을 받고 막혀 3.7시간 동안
+# 빈 결과만 받았다(2026-08-23). 차단은 예외가 아니라 빈 DataFrame으로 오므로 실패로
+# 잡히지 않는다. 지금은 탐침으로 감지해 즉시 멈추고, 모은 것까지 릴리즈한다.
+# **한 번에 다 못 받는다고 보고 여러 번 돌리는 것을 전제로 한다.**
 #
 # 주 1회인 이유: 구성종목 *목록*은 거의 안 변한다(1년 52주 중 변경 2~4주). 다만
 # 지수 개편처럼 한 번에 크게 바뀌는 사건이 연 1회쯤 있어서, 월 1회면 그 오차를
@@ -32,6 +37,16 @@ on:
         description: 이번 실행 호출 상한 (0 = 무제한). Actions 6시간 제한 방어용
         required: false
         default: "0"
+        type: string
+      sleep:
+        description: 호출 간 대기(초). 낮추면 차단 위험이 커진다
+        required: false
+        default: "0.6"
+        type: string
+      cooldown:
+        description: 차단 확인 시 쉬었다 재시도할 간격(초). 0이면 즉시 중단
+        required: false
+        default: "300"
         type: string
       no_resume:
         description: 직전 릴리즈를 이어받지 않고 처음부터 모은다
@@ -84,16 +99,20 @@ jobs:
           START_DATE="2022-01-01"
           END_DATE=""
           MAX_CALLS="0"
+          SLEEP="0.6"
+          COOLDOWN="300"
           NO_RESUME="false"
 
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             if [[ -n "${{ inputs.start_date }}" ]]; then START_DATE="${{ inputs.start_date }}"; fi
             if [[ -n "${{ inputs.end_date }}" ]]; then END_DATE="${{ inputs.end_date }}"; fi
             if [[ -n "${{ inputs.max_calls }}" ]]; then MAX_CALLS="${{ inputs.max_calls }}"; fi
+            if [[ -n "${{ inputs.sleep }}" ]]; then SLEEP="${{ inputs.sleep }}"; fi
+            if [[ -n "${{ inputs.cooldown }}" ]]; then COOLDOWN="${{ inputs.cooldown }}"; fi
             NO_RESUME="${{ inputs.no_resume }}"
           fi
 
-          ARGS="--start-date ${START_DATE} --max-calls ${MAX_CALLS}"
+          ARGS="--start-date ${START_DATE} --max-calls ${MAX_CALLS} --sleep ${SLEEP} --cooldown ${COOLDOWN}"
           if [[ -n "${END_DATE}" ]]; then ARGS+=" --end-date ${END_DATE}"; fi
           if [[ "${NO_RESUME}" == "true" ]]; then ARGS+=" --no-resume"; fi
 
@@ -119,8 +138,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      # 릴리즈는 성공했을 때만 만든다. 중간에 끊긴 결과를 latest로 올리면 다음
-      # 실행이 그걸 이어받아 구멍이 그대로 굳는다 — 아티팩트로만 남긴다.
+      # 차단이나 호출 상한으로 중간에 멈춰도 **릴리즈한다.** 빈 결과는 기록되지 않아
+      # 다음 실행이 못 받은 조합을 다시 시도하므로, 모은 만큼 올려야 다음 실행이
+      # 그만큼 덜 일한다. 한 건도 못 받았거나 실패율이 높으면 스크립트가 종료코드 1을
+      # 내므로 여기까지 오지 않는다.
       - name: Create Release
         if: success() && (github.event_name == 'schedule' || inputs.publish)
         uses: softprops/action-gh-release@v1

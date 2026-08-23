@@ -9,6 +9,7 @@ from capybara_fetcher.pipeline.etf_components import (
     KrxCredentialsError,
     build_meta,
     existing_pairs,
+    fetch_listed_by_date,
     load_etf_universe,
     merge_snapshots,
     normalize_pdf,
@@ -185,3 +186,131 @@ def test_build_meta_summarizes_coverage():
     assert meta["date_range"] == {"start": "2026-08-14", "end": "2026-08-21", "snapshots": 2}
     assert meta["snapshots_per_etf"]["069500"] == 2
     assert meta["cadence"] == "weekly"
+
+
+# ── 차단 감지 ─────────────────────────────────────────────────
+#
+# KRX는 대량 요청을 차단하는데 **예외가 아니라 빈 DataFrame**으로 응답한다.
+# 첫 백필이 그래서 3.7시간을 헛돌았다 (9,196건 중 9,099건 빈 결과, 실패는 0건).
+# 상장 전과 구분되지 않으므로 탐침으로 가른다.
+
+
+class _BlockingProvider:
+    """`block_after`건 이후로는 전부 빈 결과를 주는 가짜 KRX (= 차단 상태)."""
+
+    def __init__(self, block_after: int, recover_after_probes: int | None = None):
+        self.block_after = block_after
+        self.recover_after_probes = recover_after_probes
+        self.calls = 0
+        self.probes = 0
+
+    def fetch_etf_pdf(self, *, ticker, date):
+        if ticker == "069500" and date == "20260821":   # 탐침
+            self.probes += 1
+            if self.recover_after_probes is not None and self.probes >= self.recover_after_probes:
+                self.block_after = 10**9              # 회복
+                return _pdf()
+            return pd.DataFrame() if self.calls >= self.block_after else _pdf()
+        self.calls += 1
+        return pd.DataFrame() if self.calls > self.block_after else _pdf()
+
+
+def test_collector_stops_when_krx_blocks():
+    """차단이 확인되면 남은 격자를 헛돌지 않고 멈춘다."""
+    provider = _BlockingProvider(block_after=3)
+    collector = EtfComponentCollector(
+        provider=provider, sleep_sec=0, probe_after_empty=2, cooldown_sec=0, max_blocks=1
+    )
+    out = collector.collect(
+        tickers=[f"{i:06d}" for i in range(10)],
+        dates=["20260814", "20260821"],
+    )
+
+    assert collector.stats.blocked is True
+    assert collector.stats.blocks_seen == 1
+    # 3건 받고 빈 결과 2건에서 탐침 → 차단 확인 → 중단. 20건 격자를 다 돌지 않는다.
+    assert collector.stats.requested < 20
+    assert len(out) == 6            # 성공 3건 × 구성종목 2개 — 모은 것은 버리지 않는다
+
+
+def test_collector_resumes_when_block_clears():
+    """쿨다운 뒤 회복되면 이어서 모은다."""
+    provider = _BlockingProvider(block_after=2, recover_after_probes=1)
+    collector = EtfComponentCollector(
+        provider=provider, sleep_sec=0, probe_after_empty=2, cooldown_sec=0, max_blocks=2
+    )
+    collector.collect(tickers=["A", "B", "C"], dates=["20260821"])
+
+    assert collector.stats.blocked is False
+    assert collector.stats.fetched >= 2
+
+
+def test_empty_streak_without_block_is_not_treated_as_block():
+    """휴장일처럼 그날만 비는 경우는 차단이 아니다 — 탐침이 살아 있으면 계속 간다."""
+
+    class HolidayProvider:
+        def fetch_etf_pdf(self, *, ticker, date):
+            if ticker == "069500" and date == "20260821":
+                return _pdf()                  # 탐침은 항상 살아 있다
+            return pd.DataFrame() if date == "20260814" else _pdf()
+
+    collector = EtfComponentCollector(
+        provider=HolidayProvider(), sleep_sec=0, probe_after_empty=2, cooldown_sec=0
+    )
+    collector.collect(tickers=["A", "B", "C"], dates=["20260814", "20260821"])
+
+    assert collector.stats.blocked is False
+    assert collector.stats.empty == 3          # 휴장일 3건은 빈 결과
+    assert collector.stats.fetched == 3        # 다음 날은 정상 수집
+
+
+# ── 상장 목록 사전 필터 ────────────────────────────────────────
+
+def test_listed_filter_skips_unlisted_pairs():
+    """상장 전 조합은 묻지 않는다 — 호출을 아끼고, 빈 결과가 드물어져 차단 감지가 정확해진다."""
+    asked: list[tuple[str, str]] = []
+
+    class Provider:
+        def fetch_etf_pdf(self, *, ticker, date):
+            asked.append((ticker, date))
+            return _pdf()
+
+    collector = EtfComponentCollector(provider=Provider(), sleep_sec=0)
+    collector.collect(
+        tickers=["A", "B"],
+        dates=["20260814", "20260821"],
+        listed_by_date={"20260814": {"A"}, "20260821": {"A", "B"}},
+    )
+
+    assert ("B", "20260814") not in asked
+    assert collector.stats.skipped_unlisted == 1
+    assert len(asked) == 3
+
+
+def test_listed_filter_falls_back_when_date_missing():
+    """목록을 못 받은 날짜는 필터 없이 전부 조회한다 — 그날을 통째로 잃는 것보다 낫다."""
+    asked: list[tuple[str, str]] = []
+
+    class Provider:
+        def fetch_etf_pdf(self, *, ticker, date):
+            asked.append((ticker, date))
+            return _pdf()
+
+    collector = EtfComponentCollector(provider=Provider(), sleep_sec=0)
+    collector.collect(
+        tickers=["A", "B"], dates=["20260821"], listed_by_date={}   # 그날 목록이 없다
+    )
+
+    assert len(asked) == 2
+    assert collector.stats.skipped_unlisted == 0
+
+
+def test_fetch_listed_by_date_drops_failed_dates():
+    class Provider:
+        def list_etf_tickers(self, *, date):
+            if date == "20260814":
+                raise RuntimeError("boom")
+            return ["A", "B"]
+
+    got = fetch_listed_by_date(Provider(), ["20260814", "20260821"], sleep_sec=0)
+    assert got == {"20260821": {"A", "B"}}
